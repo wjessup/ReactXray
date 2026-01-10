@@ -13,6 +13,7 @@ interface ComponentInfo {
   filePath: string;
   props: PropInfo[];
   hooks: string[];
+  serverQueries: string[];
   isClientComponent: boolean;
   isServerComponent: boolean;
 }
@@ -164,17 +165,12 @@ export async function analyzeRouteComponents(
     }
   }
 
-  const componentTree: ComponentTreeNode[] = [];
-  for (const entryPath of allEntryPaths) {
-    const relativePath = path.relative(targetPath, entryPath);
-    const tree = buildTreeFromGraph(
-      relativePath,
-      importGraph,
-      componentMap,
-      new Set()
-    );
-    componentTree.push(tree);
-  }
+  const componentTree = buildNestedLayoutTree(
+    entryFiles,
+    targetPath,
+    importGraph,
+    componentMap
+  );
 
   const allComponents = Array.from(componentMap.values());
   const uniqueHooks = [...new Set(allComponents.flatMap((c) => c.hooks))];
@@ -379,6 +375,69 @@ function getFileImports(sourceFile: SourceFile, targetPath: string): string[] {
   return imports;
 }
 
+function buildNestedLayoutTree(
+  entryFiles: RouteEntryFiles,
+  targetPath: string,
+  importGraph: Map<string, string[]>,
+  componentMap: Map<string, ComponentInfo>
+): ComponentTreeNode[] {
+  const buildNodeWithImports = (
+    absPath: string,
+    childrenSlot: ComponentTreeNode | null
+  ): ComponentTreeNode => {
+    const file = path.relative(targetPath, absPath);
+    const imports = importGraph.get(file) || [];
+    const children: ComponentTreeNode[] = [];
+
+    for (const imp of imports) {
+      if (imp.endsWith(".tsx") || imp.endsWith(".jsx")) {
+        children.push(
+          buildTreeFromGraph(imp, importGraph, componentMap, new Set([file]))
+        );
+      }
+    }
+
+    if (childrenSlot) {
+      children.push({
+        file: "{children}",
+        component: null,
+        children: [childrenSlot],
+      });
+    }
+
+    return {
+      file,
+      component: componentMap.get(file) || null,
+      children,
+    };
+  };
+
+  let innermost: ComponentTreeNode | null = null;
+
+  if (entryFiles.page) {
+    innermost = buildNodeWithImports(entryFiles.page, null);
+  }
+
+  for (let i = entryFiles.layouts.length - 1; i >= 0; i--) {
+    innermost = buildNodeWithImports(entryFiles.layouts[i], innermost);
+  }
+
+  const result: ComponentTreeNode[] = [];
+  if (innermost) result.push(innermost);
+
+  if (entryFiles.loading) {
+    result.push(buildNodeWithImports(entryFiles.loading, null));
+  }
+  if (entryFiles.error) {
+    result.push(buildNodeWithImports(entryFiles.error, null));
+  }
+  if (entryFiles.notFound) {
+    result.push(buildNodeWithImports(entryFiles.notFound, null));
+  }
+
+  return result;
+}
+
 function buildTreeFromGraph(
   file: string,
   graph: Map<string, string[]>,
@@ -436,6 +495,7 @@ function analyzeComponentFromSource(
       );
       if (info) {
         info.hooks = findHooksInNode(decl);
+        info.serverQueries = !isClientComponent ? findServerQueries(decl) : [];
         return info;
       }
     }
@@ -454,6 +514,7 @@ function analyzeComponentFromSource(
       if (info) {
         info.name = exportName;
         info.hooks = findHooksInNode(decl);
+        info.serverQueries = !isClientComponent ? findServerQueries(decl) : [];
         return info;
       }
     }
@@ -476,13 +537,14 @@ function extractComponentInfo(
     const name = Node.isFunctionDeclaration(node)
       ? node.getName() || "Anonymous"
       : "Anonymous";
-    if (!looksLikeComponent(node)) return null;
+    if (!looksLikeComponent(node, name)) return null;
 
     return {
       name,
       filePath,
       props: extractProps(node),
       hooks: [],
+      serverQueries: [],
       isClientComponent,
       isServerComponent,
     };
@@ -495,13 +557,15 @@ function extractComponentInfo(
       (Node.isArrowFunction(initializer) ||
         Node.isFunctionExpression(initializer))
     ) {
-      if (!looksLikeComponent(initializer)) return null;
+      const varName = node.getName();
+      if (!looksLikeComponent(initializer, varName)) return null;
 
       return {
-        name: node.getName(),
+        name: varName,
         filePath,
         props: extractProps(initializer),
         hooks: [],
+        serverQueries: [],
         isClientComponent,
         isServerComponent,
       };
@@ -511,7 +575,25 @@ function extractComponentInfo(
   return null;
 }
 
-function looksLikeComponent(node: Node): boolean {
+const NEXTJS_SPECIAL_EXPORTS = [
+  "generateMetadata",
+  "generateStaticParams",
+  "revalidate",
+  "dynamic",
+  "dynamicParams",
+  "fetchCache",
+  "runtime",
+  "preferredRegion",
+  "maxDuration",
+];
+
+function looksLikeComponent(node: Node, name?: string): boolean {
+  if (name && NEXTJS_SPECIAL_EXPORTS.includes(name)) {
+    return false;
+  }
+  if (name && name.startsWith("get") && name.endsWith("Metadata")) {
+    return false;
+  }
   const text = node.getText();
   return (
     text.includes("return") && (text.includes("<") || text.includes("jsx"))
@@ -529,19 +611,17 @@ function extractProps(node: Node): PropInfo[] {
     const params = node.getParameters();
     if (params.length > 0) {
       const firstParam = params[0];
-      const nameNode = firstParam.getNameNode();
+      const typeNode = firstParam.getTypeNode();
 
-      if (Node.isObjectBindingPattern(nameNode)) {
-        for (const element of nameNode.getElements()) {
-          if (element.getDotDotDotToken()) continue;
-          const propName = element.getName();
-          if (propName === "children") continue;
-
-          props.push({
-            name: propName,
-            type: element.getType().getText(),
-            optional: false,
-          });
+      if (typeNode && Node.isTypeLiteral(typeNode)) {
+        for (const member of typeNode.getMembers()) {
+          if (Node.isPropertySignature(member)) {
+            props.push({
+              name: member.getName(),
+              type: member.getType().getText(),
+              optional: member.hasQuestionToken(),
+            });
+          }
         }
       }
     }
@@ -573,6 +653,35 @@ function findHooksInNode(node: Node): string[] {
   }
 
   return hooks;
+}
+
+function findServerQueries(node: Node): string[] {
+  const queries: string[] = [];
+  const text = node.getText();
+
+  const awaitCallRegex = /await\s+(\w+)\s*\(/g;
+  let match;
+  while ((match = awaitCallRegex.exec(text)) !== null) {
+    const fnName = match[1];
+    if (!queries.includes(fnName) && fnName !== "Promise") {
+      queries.push(fnName);
+    }
+  }
+
+  const promiseAllRegex = /Promise\.all\s*\(\s*\[([\s\S]*?)\]\s*\)/g;
+  while ((match = promiseAllRegex.exec(text)) !== null) {
+    const content = match[1];
+    const fnCallRegex = /(\w+)\s*\(/g;
+    let fnMatch;
+    while ((fnMatch = fnCallRegex.exec(content)) !== null) {
+      const fnName = fnMatch[1];
+      if (!queries.includes(fnName) && fnName !== "await") {
+        queries.push(fnName);
+      }
+    }
+  }
+
+  return queries;
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

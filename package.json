@@ -10,7 +10,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "analyze": "tsx src/cli.ts analyze",
-    "route": "tsx src/cli.ts route"
+    "route": "tsx src/cli.ts route",
+    "visualize": "tsx src/visualize.ts"
   },
   "keywords": [
     "analyzer",

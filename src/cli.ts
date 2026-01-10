@@ -132,16 +132,19 @@ program
     console.log(`Output to: ${outputPath}\n`);
 
     const result = await analyzeRouteComponents(targetPath, route);
-    const baseFilename = `route-${route.replace(/\//g, "-").replace(/^-/, "")}`;
-    const jsonPath = path.join(outputPath, `${baseFilename}.json`);
-    const htmlPath = path.join(outputPath, `${baseFilename}.html`);
+    const baseName = `route-${route.replace(/\//g, "-").replace(/^-/, "")}`;
+    const jsonFile = `${baseName}.json`;
+    const htmlFile = `${baseName}.html`;
 
-    await fs.writeFile(jsonPath, JSON.stringify(result, null, 2));
-    console.log(`  ✓ ${baseFilename}.json`);
+    await fs.writeFile(
+      path.join(outputPath, jsonFile),
+      JSON.stringify(result, null, 2)
+    );
+    console.log(`  ✓ ${jsonFile}`);
 
     const html = generateHtml(result);
-    await fs.writeFile(htmlPath, html);
-    console.log(`  ✓ ${baseFilename}.html`);
+    await fs.writeFile(path.join(outputPath, htmlFile), html);
+    console.log(`  ✓ ${htmlFile}`);
 
     console.log(`\nFound ${result.stats.totalComponents} components`);
     console.log(`  Client: ${result.stats.clientComponents}`);

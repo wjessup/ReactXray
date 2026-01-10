@@ -1,17 +1,13 @@
 #!/usr/bin/env tsx
 import fs from "fs/promises";
-
-interface PropInfo {
-  name: string;
-  type: string;
-  optional: boolean;
-}
+import path from "path";
 
 interface ComponentInfo {
   name: string;
   filePath: string;
-  props: PropInfo[];
+  props: { name: string; type: string; optional: boolean }[];
   hooks: string[];
+  serverQueries: string[];
   isClientComponent: boolean;
   isServerComponent: boolean;
 }
@@ -22,7 +18,7 @@ interface ComponentTreeNode {
   children: ComponentTreeNode[];
 }
 
-interface RouteComponentAnalysis {
+export interface RouteComponentAnalysis {
   route: string;
   entryFiles: {
     layouts: string[];
@@ -50,8 +46,9 @@ function renderTree(nodes: ComponentTreeNode[], depth = 0): string {
       const componentName = comp?.name || "—";
       const isClient = comp?.isClientComponent;
       const hooks = comp?.hooks?.length ? comp.hooks.join(", ") : "";
+      const queries = comp?.serverQueries?.length ? comp.serverQueries.join(", ") : "";
       const props = comp?.props?.length
-        ? comp.props.map((p) => `${p.name}`).join(", ")
+        ? comp.props.map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`).join(", ")
         : "";
 
       const typeClass = isClient ? "client" : "server";
@@ -69,6 +66,7 @@ function renderTree(nodes: ComponentTreeNode[], depth = 0): string {
             <span class="file-name">${fileName}</span>
             <span class="badge ${typeClass}">${typeLabel}</span>
             ${hooks ? `<span class="hooks">${hooks}</span>` : ""}
+            ${queries ? `<span class="queries">⚡ ${queries}</span>` : ""}
           </div>
           ${props ? `<div class="props">Props: ${props}</div>` : ""}
           ${childrenHtml}
@@ -152,6 +150,7 @@ export function generateHtml(data: RouteComponentAnalysis): string {
     .badge.client { background: #388bfd33; color: #58a6ff; }
     .badge.server { background: #238636; color: #7ee787; }
     .hooks { color: #ffa657; font-size: 0.75rem; }
+    .queries { color: #79c0ff; font-size: 0.75rem; }
     .props {
       font-size: 0.75rem;
       color: #8b949e;
