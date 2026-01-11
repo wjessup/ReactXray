@@ -429,18 +429,64 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     return ancestors;
   }
 
-  function elementHasAncestorComponent(el, ancestorName) {
+  function getFiberAncestorNames(el) {
     const fiber = getReactFiber(el);
-    if (!fiber) return false;
+    if (!fiber) return [];
+    const ancestors = [];
     let current = fiber.return;
     const seen = new Set();
-    while (current) {
+    while (current && ancestors.length < 50) {
       if (seen.has(current)) break;
       seen.add(current);
-      if (getFiberName(current) === ancestorName) return true;
+      const name = getFiberName(current);
+      if (name) ancestors.push(name);
       current = current.return;
     }
-    return false;
+    return ancestors;
+  }
+
+  function longestContiguousMatch(treeAncestors, fiberAncestors) {
+    if (treeAncestors.length === 0) return 0;
+    
+    let bestRun = 0;
+    const treeReversed = [...treeAncestors].reverse();
+    
+    for (let fStart = 0; fStart < fiberAncestors.length; fStart++) {
+      let run = 0;
+      let tIdx = 0;
+      let fIdx = fStart;
+      
+      while (tIdx < treeReversed.length && fIdx < fiberAncestors.length) {
+        if (treeReversed[tIdx] === fiberAncestors[fIdx]) {
+          run++;
+          tIdx++;
+          fIdx++;
+        } else {
+          fIdx++;
+          if (fIdx - fStart > tIdx + 5) break;
+        }
+      }
+      bestRun = Math.max(bestRun, run);
+    }
+    
+    return bestRun;
+  }
+
+  function scoreMatch(treeAncestors, fiberAncestors) {
+    const contiguous = longestContiguousMatch(treeAncestors, fiberAncestors);
+    
+    let immediateParentMatch = 0;
+    if (treeAncestors.length > 0 && fiberAncestors.length > 0) {
+      const parent = treeAncestors[treeAncestors.length - 1];
+      for (let i = 0; i < Math.min(3, fiberAncestors.length); i++) {
+        if (fiberAncestors[i] === parent) {
+          immediateParentMatch = 10 - i;
+          break;
+        }
+      }
+    }
+    
+    return contiguous * 5 + immediateParentMatch;
   }
 
   function tryFindDomElement(node, nodeId) {
@@ -450,25 +496,22 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     if (allMatches.length === 0) return null;
     if (allMatches.length === 1) return allMatches[0];
     
-    const ancestors = getAncestorNames(nodeId);
-    if (ancestors.length > 0) {
-      const parentName = ancestors[ancestors.length - 1];
-      const filtered = allMatches.filter(el => elementHasAncestorComponent(el, parentName));
-      if (filtered.length === 1) return filtered[0];
-      if (filtered.length > 1) {
-        for (let i = ancestors.length - 2; i >= 0; i--) {
-          const grandparent = ancestors[i];
-          const moreFiltered = filtered.filter(el => elementHasAncestorComponent(el, grandparent));
-          if (moreFiltered.length === 1) return moreFiltered[0];
-          if (moreFiltered.length > 0 && moreFiltered.length < filtered.length) {
-            return moreFiltered[0];
-          }
-        }
-        return filtered[0];
+    const treeAncestors = getAncestorNames(nodeId);
+    if (treeAncestors.length === 0) return allMatches[0];
+    
+    let bestMatch = allMatches[0];
+    let bestScore = -1;
+    
+    for (const el of allMatches) {
+      const fiberAncestors = getFiberAncestorNames(el);
+      const score = scoreMatch(treeAncestors, fiberAncestors);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = el;
       }
     }
     
-    return allMatches[0];
+    return bestMatch;
   }
   
   function findAllMatchingElements(node, nodeId) {
@@ -477,11 +520,18 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     const allMatches = findElementsByComponentName(name);
     if (allMatches.length <= 1) return allMatches;
     
-    const ancestors = getAncestorNames(nodeId);
-    if (ancestors.length > 0) {
-      const parentName = ancestors[ancestors.length - 1];
-      const filtered = allMatches.filter(el => elementHasAncestorComponent(el, parentName));
-      if (filtered.length > 0) return filtered;
+    const treeAncestors = getAncestorNames(nodeId);
+    if (treeAncestors.length === 0) return allMatches;
+    
+    const scored = allMatches.map(el => ({
+      el,
+      score: scoreMatch(treeAncestors, getFiberAncestorNames(el))
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    
+    const topScore = scored[0].score;
+    if (topScore > 0) {
+      return scored.filter(s => s.score === topScore).map(s => s.el);
     }
     return allMatches;
   }
@@ -709,21 +759,33 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     return count;
   }
 
-  function findNodeByAncestry(nodes, stack, depth = 0) {
-    if (depth >= stack.length) return null;
-    const targetName = stack[depth];
-    
+  function countNodesWithName(nodes, name) {
+    let count = 0;
     for (const n of nodes) {
-      if (n.component?.name === targetName) {
-        if (depth === stack.length - 1) return n;
-        if (n.children.length) {
-          const found = findNodeByAncestry(n.children, stack, depth + 1);
-          if (found) return found;
-        }
-        return n;
+      if (n.component?.name === name) count++;
+      if (n.children.length) count += countNodesWithName(n.children, name);
+    }
+    return count;
+  }
+
+  function findNodeWithId(nodes, name, pathPrefix = '') {
+    for (let i = 0; i < nodes.length; i++) {
+      const nodeId = pathPrefix ? pathPrefix + '-' + i : String(i);
+      if (nodes[i].component?.name === name) return { node: nodes[i], nodeId };
+      if (nodes[i].children.length) {
+        const found = findNodeWithId(nodes[i].children, name, nodeId);
+        if (found) return found;
       }
-      if (n.children.length) {
-        const found = findNodeByAncestry(n.children, stack, depth);
+    }
+    return null;
+  }
+
+  function findInSubtreeWithId(nodes, name, pathPrefix) {
+    for (let i = 0; i < nodes.length; i++) {
+      const nodeId = pathPrefix + '-' + i;
+      if (nodes[i].component?.name === name) return { node: nodes[i], nodeId };
+      if (nodes[i].children.length) {
+        const found = findInSubtreeWithId(nodes[i].children, name, nodeId);
         if (found) return found;
       }
     }
@@ -731,17 +793,51 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
   }
 
   function selectTreeNodeByPath(stack) {
-    const reversedStack = [...stack].reverse();
-    const found = findNodeByAncestry(TREE, reversedStack, 0);
-    
-    if (found) {
-      return selectTreeNodeByFile(found.file, found.component?.name);
+    for (const ancestorName of [...stack].reverse()) {
+      const count = countNodesWithName(TREE, ancestorName);
+      if (count === 1) {
+        const result = findNodeWithId(TREE, ancestorName);
+        if (result) {
+          for (const targetName of stack) {
+            const targetResult = findInSubtreeWithId(result.node.children, targetName, result.nodeId);
+            if (targetResult) {
+              return selectTreeNodeById(targetResult.nodeId);
+            }
+          }
+          return selectTreeNodeById(result.nodeId);
+        }
+      }
     }
     
     for (const name of stack) {
-      if (selectTreeNodeByFile(null, name)) return true;
+      const result = findNodeWithId(TREE, name);
+      if (result && selectTreeNodeById(result.nodeId)) return true;
     }
     return false;
+  }
+
+  function selectTreeNodeById(nodeId) {
+    const nodeEl = panel.querySelector(\`.ro-node[data-id="\${nodeId}"]\`);
+    if (!nodeEl) return false;
+    
+    let parent = nodeEl.parentElement;
+    while (parent && parent !== panel) {
+      if (parent.classList.contains('ro-node') && parent.classList.contains('ro-collapsed')) {
+        parent.classList.remove('ro-collapsed');
+      }
+      parent = parent.parentElement;
+    }
+    
+    panel.querySelectorAll('.ro-node-header.selected').forEach(el => el.classList.remove('selected'));
+    const header = nodeEl.querySelector(':scope > .ro-node-header');
+    if (header) {
+      header.classList.add('selected');
+      setTimeout(() => {
+        header.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    }
+    
+    return true;
   }
 
   function selectTreeNodeByFile(file, name) {
