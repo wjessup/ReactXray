@@ -11,6 +11,7 @@
     "dev": "tsc --watch",
     "analyze": "tsx src/cli.ts analyze",
     "route": "tsx src/cli.ts route",
+    "overlay": "tsx src/cli.ts overlay",
     "visualize": "tsx src/visualize.ts"
   },
   "keywords": [

@@ -46,9 +46,13 @@ function renderTree(nodes: ComponentTreeNode[], depth = 0): string {
       const componentName = comp?.name || "—";
       const isClient = comp?.isClientComponent;
       const hooks = comp?.hooks?.length ? comp.hooks.join(", ") : "";
-      const queries = comp?.serverQueries?.length ? comp.serverQueries.join(", ") : "";
+      const queries = comp?.serverQueries?.length
+        ? comp.serverQueries.join(", ")
+        : "";
       const props = comp?.props?.length
-        ? comp.props.map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`).join(", ")
+        ? comp.props
+            .map((p) => `${p.name}${p.optional ? "?" : ""}: ${p.type}`)
+            .join(", ")
         : "";
 
       const typeClass = isClient ? "client" : "server";
@@ -200,10 +204,35 @@ export function generateHtml(data: RouteComponentAnalysis): string {
 
   <div class="entry-files">
     <h3>Entry Files</h3>
-    ${data.entryFiles.layouts.map((l) => `<div class="entry-file">Layout: <span>${l.split("/src/").pop()}</span></div>`).join("")}
-    ${data.entryFiles.page ? `<div class="entry-file">Page: <span>${data.entryFiles.page.split("/src/").pop()}</span></div>` : ""}
-    ${data.entryFiles.loading ? `<div class="entry-file">Loading: <span>${data.entryFiles.loading.split("/src/").pop()}</span></div>` : ""}
-    ${data.entryFiles.error ? `<div class="entry-file">Error: <span>${data.entryFiles.error.split("/src/").pop()}</span></div>` : ""}
+    ${data.entryFiles.layouts
+      .map(
+        (l) =>
+          `<div class="entry-file">Layout: <span>${l
+            .split("/src/")
+            .pop()}</span></div>`
+      )
+      .join("")}
+    ${
+      data.entryFiles.page
+        ? `<div class="entry-file">Page: <span>${data.entryFiles.page
+            .split("/src/")
+            .pop()}</span></div>`
+        : ""
+    }
+    ${
+      data.entryFiles.loading
+        ? `<div class="entry-file">Loading: <span>${data.entryFiles.loading
+            .split("/src/")
+            .pop()}</span></div>`
+        : ""
+    }
+    ${
+      data.entryFiles.error
+        ? `<div class="entry-file">Error: <span>${data.entryFiles.error
+            .split("/src/")
+            .pop()}</span></div>`
+        : ""
+    }
   </div>
 
   <div class="controls">

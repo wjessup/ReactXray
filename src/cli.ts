@@ -9,6 +9,7 @@ import { analyzeComponents } from "./analyzers/components.js";
 import { analyzeRoutes } from "./analyzers/routes.js";
 import { analyzeRouteComponents } from "./analyzers/route-components.js";
 import { generateHtml } from "./visualize.js";
+import { generateOverlayScript, generateBookmarklet } from "./overlay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -146,10 +147,67 @@ program
     await fs.writeFile(path.join(outputPath, htmlFile), html);
     console.log(`  ✓ ${htmlFile}`);
 
+    const overlayFile = `${baseName}-overlay.js`;
+    const overlayScript = generateOverlayScript(result);
+    await fs.writeFile(path.join(outputPath, overlayFile), overlayScript);
+    console.log(`  ✓ ${overlayFile}`);
+
     console.log(`\nFound ${result.stats.totalComponents} components`);
     console.log(`  Client: ${result.stats.clientComponents}`);
     console.log(`  Server: ${result.stats.serverComponents}`);
     console.log("\nAnalysis complete!");
   });
+
+program
+  .command("overlay")
+  .description("Generate an injectable overlay script for a route")
+  .argument("<target>", "Path to the Next.js project")
+  .argument("<route>", "Route to analyze (e.g., /dashboard/settings)")
+  .option("-o, --out <dir>", "Output directory for artifacts", defaultOutput)
+  .option("-b, --bookmarklet", "Also generate a bookmarklet file")
+  .action(
+    async (
+      target: string,
+      route: string,
+      options: { out: string; bookmarklet?: boolean }
+    ) => {
+      const targetPath = path.resolve(target);
+      const outputPath = path.resolve(options.out);
+
+      try {
+        await fs.access(targetPath);
+      } catch {
+        console.error(`Error: Target directory does not exist: ${targetPath}`);
+        process.exit(1);
+      }
+
+      await fs.mkdir(outputPath, { recursive: true });
+
+      console.log(`\nGenerating overlay for route: ${route}`);
+      console.log(`Project: ${targetPath}`);
+      console.log(`Output to: ${outputPath}\n`);
+
+      const result = await analyzeRouteComponents(targetPath, route);
+      const baseName = `overlay-${route.replace(/\//g, "-").replace(/^-/, "")}`;
+
+      const script = generateOverlayScript(result);
+      const scriptFile = `${baseName}.js`;
+      await fs.writeFile(path.join(outputPath, scriptFile), script);
+      console.log(`  ✓ ${scriptFile}`);
+
+      if (options.bookmarklet) {
+        const bookmarklet = generateBookmarklet(result);
+        const bookmarkletFile = `${baseName}-bookmarklet.txt`;
+        await fs.writeFile(path.join(outputPath, bookmarkletFile), bookmarklet);
+        console.log(`  ✓ ${bookmarkletFile}`);
+      }
+
+      console.log("\nUsage:");
+      console.log("  1. Open your app in browser");
+      console.log(`  2. Paste contents of ${scriptFile} into browser console`);
+      console.log("  3. Or drag the bookmarklet to your bookmarks bar");
+      console.log("\nKeyboard shortcut: Ctrl+Shift+C to toggle overlay");
+    }
+  );
 
 program.parse();
