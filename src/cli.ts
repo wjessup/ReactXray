@@ -296,7 +296,7 @@ program
             return;
           }
 
-          if (req.url === "/__overlay_dynamic.js") {
+          if (req.url?.startsWith("/__overlay_dynamic.js")) {
             const referer = req.headers.referer;
             let route = "/";
             if (referer) {
@@ -309,6 +309,29 @@ program
             res.setHeader("Content-Type", "application/javascript");
             res.setHeader("Cache-Control", "no-cache");
             res.end(script || "console.log('No overlay for this route');");
+            return;
+          }
+
+          if (req.url?.startsWith("/__overlay_data.json")) {
+            const url = new URL(req.url, `http://localhost:${port}`);
+            const route = url.searchParams.get("route") || "/";
+            console.log(`  Fetching data for route: ${route}`);
+            try {
+              const result = await analyzeRouteComponents(path.resolve(options.project!), route);
+              res.setHeader("Content-Type", "application/json");
+              res.setHeader("Cache-Control", "no-cache");
+              res.setHeader("Access-Control-Allow-Origin", "*");
+              res.end(JSON.stringify({
+                route: result.route,
+                componentTree: result.componentTree,
+                stats: result.stats
+              }));
+              console.log(`  ✓ Data ready (${result.stats.totalComponents} components)`);
+            } catch (err) {
+              console.error(`  ✗ Failed:`, (err as Error).message);
+              res.statusCode = 500;
+              res.end(JSON.stringify({ error: (err as Error).message }));
+            }
             return;
           }
 
@@ -332,6 +355,10 @@ program
               const contentType = headers["content-type"] || "";
               const isHtml = contentType.includes("text/html");
               const shouldInject = options.project || options.overlay;
+              
+              if (isHtml || req.url?.startsWith("/__overlay")) {
+                console.log(`  [${req.method}] ${req.url} → ${contentType.slice(0, 30)} (inject: ${isHtml && shouldInject})`);
+              }
 
               if (isHtml && shouldInject) {
                 delete headers["content-length"];
@@ -342,13 +369,23 @@ program
                 proxyRes.on("data", (chunk) => chunks.push(chunk));
                 proxyRes.on("end", async () => {
                   let html = Buffer.concat(chunks).toString("utf-8");
-
+                  const hasBody = html.includes("</body>");
+                  console.log(`  Injecting overlay (has </body>: ${hasBody}, length: ${html.length})`);
+                  
                   if (options.project) {
-                    const overlayScript = `<script src="/__overlay_dynamic.js"></script>`;
-                    html = html.replace("</body>", `${overlayScript}</body>`);
+                    const overlayScript = `<script src="/__overlay_dynamic.js?t=${Date.now()}"></script>`;
+                    if (hasBody) {
+                      html = html.replace("</body>", `${overlayScript}</body>`);
+                    } else {
+                      html += overlayScript;
+                    }
                   } else if (options.overlay) {
                     const overlayScript = `<script src="/__overlay/${options.overlay}"></script>`;
-                    html = html.replace("</body>", `${overlayScript}</body>`);
+                    if (hasBody) {
+                      html = html.replace("</body>", `${overlayScript}</body>`);
+                    } else {
+                      html += overlayScript;
+                    }
                   }
                   res.end(html);
                 });

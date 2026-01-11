@@ -11,12 +11,14 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     return;
   }
 
-  const TREE = ${treeJson};
-  const STATS = ${statsJson};
-  const ROUTE = ${routeJson};
+  let TREE = ${treeJson};
+  let STATS = ${statsJson};
+  let ROUTE = ${routeJson};
 
   let panelWidth = parseInt(localStorage.getItem('ro-panel-width') || '380', 10);
   let isOpen = false;
+  let isLoading = false;
+  let currentPath = window.location.pathname;
 
   const styles = document.createElement('style');
   styles.textContent = \`
@@ -195,6 +197,43 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       white-space: nowrap;
     }
     .ro-hidden { display: none !important; }
+    .ro-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px;
+      color: #8b949e;
+    }
+    .ro-loading-spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #30363d;
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: ro-spin 1s linear infinite;
+    }
+    @keyframes ro-spin {
+      to { transform: rotate(360deg); }
+    }
+    .ro-loading-text {
+      margin-top: 12px;
+      font-size: 12px;
+    }
+    .ro-pause-btn {
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #c9d1d9;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      font-family: inherit;
+      margin-left: auto;
+    }
+    .ro-pause-btn:hover { background: #30363d; }
+    .ro-pause-btn.paused { background: #f0883e; color: #0d1117; border-color: #f0883e; }
+    .ro-header-row { display: flex; align-items: center; gap: 8px; }
   \`;
   document.head.appendChild(styles);
 
@@ -214,6 +253,9 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
   let highlightEl = null;
   let tooltip = null;
   let selectedHighlight = null;
+  let lastClickedNodeId = null;
+  let cycleIndex = 0;
+  let isPaused = false;
 
   function updatePanelWidth(width) {
     panelWidth = Math.max(280, Math.min(800, width));
@@ -375,24 +417,73 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     return results;
   }
 
-  function tryFindDomElement(node, index = 0) {
+  function getAncestorNames(nodeId) {
+    const parts = nodeId.split('-').map(Number);
+    const ancestors = [];
+    let current = TREE;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const node = current[parts[i]];
+      if (node?.component?.name) ancestors.push(node.component.name);
+      current = node?.children || [];
+    }
+    return ancestors;
+  }
+
+  function elementHasAncestorComponent(el, ancestorName) {
+    const fiber = getReactFiber(el);
+    if (!fiber) return false;
+    let current = fiber.return;
+    const seen = new Set();
+    while (current) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      if (getFiberName(current) === ancestorName) return true;
+      current = current.return;
+    }
+    return false;
+  }
+
+  function tryFindDomElement(node, nodeId) {
     if (!node.component) return null;
     const name = node.component.name;
-    const byFiber = findElementsByComponentName(name);
-    if (byFiber.length > index) return byFiber[index];
-    if (byFiber.length > 0) return byFiber[0];
-    const selectors = [
-      \`[data-testid="\${name}"]\`,
-      \`[data-testid="\${name.toLowerCase()}"]\`,
-      \`[data-component="\${name}"]\`,
-    ];
-    for (const sel of selectors) {
-      try {
-        const el = document.querySelector(sel);
-        if (el && !el.closest('#repo-overlay-panel')) return el;
-      } catch {}
+    const allMatches = findElementsByComponentName(name);
+    if (allMatches.length === 0) return null;
+    if (allMatches.length === 1) return allMatches[0];
+    
+    const ancestors = getAncestorNames(nodeId);
+    if (ancestors.length > 0) {
+      const parentName = ancestors[ancestors.length - 1];
+      const filtered = allMatches.filter(el => elementHasAncestorComponent(el, parentName));
+      if (filtered.length === 1) return filtered[0];
+      if (filtered.length > 1) {
+        for (let i = ancestors.length - 2; i >= 0; i--) {
+          const grandparent = ancestors[i];
+          const moreFiltered = filtered.filter(el => elementHasAncestorComponent(el, grandparent));
+          if (moreFiltered.length === 1) return moreFiltered[0];
+          if (moreFiltered.length > 0 && moreFiltered.length < filtered.length) {
+            return moreFiltered[0];
+          }
+        }
+        return filtered[0];
+      }
     }
-    return null;
+    
+    return allMatches[0];
+  }
+  
+  function findAllMatchingElements(node, nodeId) {
+    if (!node.component) return [];
+    const name = node.component.name;
+    const allMatches = findElementsByComponentName(name);
+    if (allMatches.length <= 1) return allMatches;
+    
+    const ancestors = getAncestorNames(nodeId);
+    if (ancestors.length > 0) {
+      const parentName = ancestors[ancestors.length - 1];
+      const filtered = allMatches.filter(el => elementHasAncestorComponent(el, parentName));
+      if (filtered.length > 0) return filtered;
+    }
+    return allMatches;
   }
 
   function createSelectedHighlight() {
@@ -462,7 +553,10 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     panel.innerHTML = \`
       <div class="ro-resize-handle"></div>
       <div class="ro-header">
-        <h2>🧩 Component Overlay</h2>
+        <div class="ro-header-row">
+          <h2>🧩 Component Overlay</h2>
+          <button class="ro-pause-btn" id="ro-pause-btn">\${isPaused ? '▶ Resume' : '⏸ Pause'}</button>
+        </div>
         <div class="ro-stats">
           <div class="ro-stat"><span class="ro-stat-value">\${STATS.totalComponents}</span><span class="ro-stat-label">total</span></div>
           <div class="ro-stat"><span class="ro-stat-value">\${STATS.clientComponents}</span><span class="ro-stat-label">client</span></div>
@@ -493,6 +587,18 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       render();
     });
 
+    const pauseBtn = panel.querySelector('#ro-pause-btn');
+    pauseBtn.addEventListener('click', () => {
+      isPaused = !isPaused;
+      pauseBtn.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
+      pauseBtn.classList.toggle('paused', isPaused);
+      if (isPaused) {
+        disableInspectMode();
+      } else if (isOpen) {
+        enableInspectMode();
+      }
+    });
+
     attachNodeEvents();
   }
 
@@ -510,13 +616,21 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
         header.classList.add('selected');
         
         if (treeNode) {
-          const index = countPrecedingComponentsByName(TREE, nodeId, name);
-          const domEl = tryFindDomElement(treeNode, Math.max(0, index));
-          if (domEl) {
-            showSelectedHighlight(domEl, name);
+          const allMatches = findAllMatchingElements(treeNode, nodeId);
+          if (allMatches.length > 0) {
+            if (lastClickedNodeId === nodeId) {
+              cycleIndex = (cycleIndex + 1) % allMatches.length;
+            } else {
+              cycleIndex = 0;
+              lastClickedNodeId = nodeId;
+            }
+            const domEl = allMatches[cycleIndex];
+            const label = allMatches.length > 1 ? name + ' (' + (cycleIndex + 1) + '/' + allMatches.length + ')' : name;
+            showSelectedHighlight(domEl, label);
             domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
           } else {
             hideSelectedHighlight();
+            lastClickedNodeId = null;
           }
         }
         
@@ -531,8 +645,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
         const treeNode = findNodeById(TREE, nodeId);
         if (treeNode) {
           showTooltip(e, treeNode);
-          const index = countPrecedingComponentsByName(TREE, nodeId, name);
-          const domEl = tryFindDomElement(treeNode, Math.max(0, index));
+          const domEl = tryFindDomElement(treeNode, nodeId);
           if (domEl) showHighlight(domEl, name);
         }
       });
@@ -699,6 +812,56 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     hideSelectedHighlight();
   }
 
+  function showLoading() {
+    isLoading = true;
+    const tree = panel.querySelector('.ro-tree');
+    if (tree) {
+      tree.innerHTML = '<div class="ro-loading"><div class="ro-loading-spinner"></div><div class="ro-loading-text">Analyzing route...</div></div>';
+    }
+  }
+
+  async function reloadData() {
+    const newPath = window.location.pathname;
+    if (isLoading) return;
+    
+    showLoading();
+    currentPath = newPath;
+    
+    try {
+      const res = await fetch('/__overlay_data.json?route=' + encodeURIComponent(newPath));
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      
+      TREE = data.componentTree;
+      STATS = data.stats;
+      ROUTE = data.route;
+      
+      isLoading = false;
+      render();
+      
+      const routeEl = panel.querySelector('.route');
+      if (routeEl) routeEl.textContent = ROUTE;
+      
+      const statEls = panel.querySelectorAll('.ro-stat-value');
+      if (statEls[0]) statEls[0].textContent = STATS.totalComponents;
+      if (statEls[1]) statEls[1].textContent = STATS.clientComponents;
+      if (statEls[2]) statEls[2].textContent = STATS.serverComponents;
+      
+    } catch (err) {
+      isLoading = false;
+      const tree = panel.querySelector('.ro-tree');
+      if (tree) {
+        tree.innerHTML = '<div class="ro-loading"><div class="ro-loading-text" style="color:#f85149;">Error: ' + err.message + '</div></div>';
+      }
+    }
+  }
+
+  function checkRouteChange() {
+    if (window.location.pathname !== currentPath && !isLoading) {
+      reloadData();
+    }
+  }
+
   function toggle() {
     isOpen = !isOpen;
     panel.classList.toggle('open', isOpen);
@@ -706,7 +869,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     document.body.classList.toggle('ro-panel-open', isOpen);
     toggleBtn.innerHTML = isOpen ? '✕' : '🔍';
     
-    if (isOpen) {
+    if (isOpen && !isPaused) {
       enableInspectMode();
     } else {
       disableInspectMode();
@@ -721,6 +884,9 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     }
   });
 
+  window.addEventListener('popstate', checkRouteChange);
+  setInterval(checkRouteChange, 500);
+
   document.body.appendChild(panel);
   document.body.appendChild(toggleBtn);
 
@@ -731,7 +897,8 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     toggle, 
     show: () => { if (!isOpen) toggle(); }, 
     hide: () => { if (isOpen) toggle(); },
-    setWidth: updatePanelWidth
+    setWidth: updatePanelWidth,
+    reload: reloadData
   };
 })();`;
 }
