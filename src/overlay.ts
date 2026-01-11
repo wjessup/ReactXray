@@ -375,10 +375,11 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     return results;
   }
 
-  function tryFindDomElement(node) {
+  function tryFindDomElement(node, index = 0) {
     if (!node.component) return null;
     const name = node.component.name;
     const byFiber = findElementsByComponentName(name);
+    if (byFiber.length > index) return byFiber[index];
     if (byFiber.length > 0) return byFiber[0];
     const selectors = [
       \`[data-testid="\${name}"]\`,
@@ -419,8 +420,9 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     if (selectedHighlight) selectedHighlight.style.display = 'none';
   }
 
-  function renderTree(nodes, depth = 0) {
+  function renderTree(nodes, depth = 0, pathPrefix = '') {
     return nodes.map((node, i) => {
+      const nodeId = pathPrefix ? pathPrefix + '-' + i : String(i);
       const hasChildren = node.children.length > 0;
       const comp = node.component;
       const fileName = node.file.split('/').pop() || node.file;
@@ -432,10 +434,10 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
         name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         node.file.toLowerCase().includes(searchTerm.toLowerCase());
       
-      const childrenHtml = hasChildren ? \`<div class="ro-children">\${renderTree(node.children, depth + 1)}</div>\` : '';
+      const childrenHtml = hasChildren ? \`<div class="ro-children">\${renderTree(node.children, depth + 1, nodeId)}</div>\` : '';
       
       return \`
-        <div class="ro-node \${matchesSearch ? '' : 'ro-hidden'}" data-depth="\${depth}" data-name="\${name}" data-file="\${node.file}">
+        <div class="ro-node \${matchesSearch ? '' : 'ro-hidden'}" data-depth="\${depth}" data-name="\${name}" data-file="\${node.file}" data-id="\${nodeId}">
           <div class="ro-node-header">
             <span class="ro-toggle">\${hasChildren ? '▼' : '•'}</span>
             <span class="ro-name">\${name}</span>
@@ -501,14 +503,15 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       header.addEventListener('click', (e) => {
         e.stopPropagation();
         const name = node.dataset.name;
-        const file = node.dataset.file;
-        const treeNode = findNodeByFile(TREE, file);
+        const nodeId = node.dataset.id;
+        const treeNode = findNodeById(TREE, nodeId);
         
         panel.querySelectorAll('.ro-node-header.selected').forEach(el => el.classList.remove('selected'));
         header.classList.add('selected');
         
         if (treeNode) {
-          const domEl = tryFindDomElement(treeNode);
+          const index = countPrecedingComponentsByName(TREE, nodeId, name);
+          const domEl = tryFindDomElement(treeNode, Math.max(0, index));
           if (domEl) {
             showSelectedHighlight(domEl, name);
             domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -524,11 +527,12 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
 
       header.addEventListener('mouseenter', (e) => {
         const name = node.dataset.name;
-        const file = node.dataset.file;
-        const treeNode = findNodeByFile(TREE, file);
+        const nodeId = node.dataset.id;
+        const treeNode = findNodeById(TREE, nodeId);
         if (treeNode) {
           showTooltip(e, treeNode);
-          const domEl = tryFindDomElement(treeNode);
+          const index = countPrecedingComponentsByName(TREE, nodeId, name);
+          const domEl = tryFindDomElement(treeNode, Math.max(0, index));
           if (domEl) showHighlight(domEl, name);
         }
       });
@@ -554,6 +558,42 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       }
     }
     return null;
+  }
+
+  function findNodeById(nodes, id, pathPrefix = '') {
+    for (let i = 0; i < nodes.length; i++) {
+      const nodeId = pathPrefix ? pathPrefix + '-' + i : String(i);
+      if (nodeId === id) return nodes[i];
+      if (nodes[i].children.length) {
+        const found = findNodeById(nodes[i].children, id, nodeId);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function countPrecedingComponentsByName(nodes, targetId, name, pathPrefix = '') {
+    let count = 0;
+    for (let i = 0; i < nodes.length; i++) {
+      const nodeId = pathPrefix ? pathPrefix + '-' + i : String(i);
+      if (nodeId === targetId) return count;
+      if (nodes[i].component?.name === name) count++;
+      if (nodes[i].children.length) {
+        const result = countPrecedingComponentsByName(nodes[i].children, targetId, name, nodeId);
+        if (result >= 0) return count + result;
+        count += countComponentsByName(nodes[i].children, name);
+      }
+    }
+    return -1;
+  }
+
+  function countComponentsByName(nodes, name) {
+    let count = 0;
+    for (const n of nodes) {
+      if (n.component?.name === name) count++;
+      if (n.children.length) count += countComponentsByName(n.children, name);
+    }
+    return count;
   }
 
   function findNodeByAncestry(nodes, stack, depth = 0) {

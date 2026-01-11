@@ -12,7 +12,8 @@
     "analyze": "tsx src/cli.ts analyze",
     "route": "tsx src/cli.ts route",
     "overlay": "tsx src/cli.ts overlay",
-    "visualize": "tsx src/visualize.ts"
+    "visualize": "tsx src/visualize.ts",
+    "serve": "tsx src/cli.ts serve"
   },
   "keywords": [
     "analyzer",

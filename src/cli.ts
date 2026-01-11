@@ -210,4 +210,235 @@ program
     }
   );
 
+program
+  .command("serve")
+  .description("Serve overlay scripts via local HTTP server for easy injection")
+  .option("-p, --port <port>", "Port to serve on", "9876")
+  .option(
+    "--proxy <url>",
+    "Proxy target app and strip CSP (e.g., http://localhost:3000)"
+  )
+  .option("--project <path>", "Next.js project path for dynamic route analysis")
+  .option(
+    "--overlay <file>",
+    "Static overlay file to inject (ignored if --project is set)"
+  )
+  .option(
+    "-o, --out <dir>",
+    "Directory containing overlay scripts",
+    defaultOutput
+  )
+  .action(
+    async (options: {
+      port: string;
+      out: string;
+      proxy?: string;
+      overlay?: string;
+      project?: string;
+    }) => {
+      const { createServer, request: httpRequest } = await import("http");
+      const { request: httpsRequest } = await import("https");
+      const outputPath = path.resolve(options.out);
+      const port = parseInt(options.port, 10);
+
+      const overlayCache = new Map<string, { script: string; time: number }>();
+      const CACHE_TTL = 5000;
+
+      async function getOverlayForRoute(route: string): Promise<string | null> {
+        if (!options.project) return null;
+
+        const cached = overlayCache.get(route);
+        if (cached && Date.now() - cached.time < CACHE_TTL) {
+          return cached.script;
+        }
+
+        try {
+          console.log(`  Analyzing route: ${route}`);
+          const result = await analyzeRouteComponents(
+            path.resolve(options.project),
+            route
+          );
+          const script = generateOverlayScript(result);
+          overlayCache.set(route, { script, time: Date.now() });
+          console.log(
+            `  ✓ Generated overlay (${result.stats.totalComponents} components)`
+          );
+          return script;
+        } catch (err) {
+          console.error(
+            `  ✗ Failed to analyze route ${route}:`,
+            (err as Error).message
+          );
+          return null;
+        }
+      }
+
+      if (options.proxy) {
+        const targetUrl = new URL(options.proxy);
+        const isHttps = targetUrl.protocol === "https:";
+        const makeRequest = isHttps ? httpsRequest : httpRequest;
+
+        const server = createServer(async (req, res) => {
+          if (req.url?.startsWith("/__overlay/")) {
+            const file = req.url.slice(11);
+            try {
+              const content = await fs.readFile(
+                path.join(outputPath, file),
+                "utf-8"
+              );
+              res.setHeader("Content-Type", "application/javascript");
+              res.setHeader("Cache-Control", "no-cache");
+              res.end(content);
+            } catch {
+              res.statusCode = 404;
+              res.end("Not found");
+            }
+            return;
+          }
+
+          if (req.url === "/__overlay_dynamic.js") {
+            const referer = req.headers.referer;
+            let route = "/";
+            if (referer) {
+              try {
+                const refUrl = new URL(referer);
+                route = refUrl.pathname;
+              } catch {}
+            }
+            const script = await getOverlayForRoute(route);
+            res.setHeader("Content-Type", "application/javascript");
+            res.setHeader("Cache-Control", "no-cache");
+            res.end(script || "console.log('No overlay for this route');");
+            return;
+          }
+
+          const reqHeaders = { ...req.headers, host: targetUrl.host };
+          delete reqHeaders["accept-encoding"];
+
+          const proxyReq = makeRequest(
+            {
+              hostname: targetUrl.hostname,
+              port: targetUrl.port || (isHttps ? 443 : 80),
+              path: req.url,
+              method: req.method,
+              headers: reqHeaders,
+            },
+            (proxyRes) => {
+              const headers = { ...proxyRes.headers };
+              delete headers["content-security-policy"];
+              delete headers["content-security-policy-report-only"];
+              delete headers["x-content-security-policy"];
+
+              const contentType = headers["content-type"] || "";
+              const isHtml = contentType.includes("text/html");
+              const shouldInject = options.project || options.overlay;
+
+              if (isHtml && shouldInject) {
+                delete headers["content-length"];
+                delete headers["content-encoding"];
+                res.writeHead(proxyRes.statusCode || 200, headers);
+
+                const chunks: Buffer[] = [];
+                proxyRes.on("data", (chunk) => chunks.push(chunk));
+                proxyRes.on("end", async () => {
+                  let html = Buffer.concat(chunks).toString("utf-8");
+
+                  if (options.project) {
+                    const overlayScript = `<script src="/__overlay_dynamic.js"></script>`;
+                    html = html.replace("</body>", `${overlayScript}</body>`);
+                  } else if (options.overlay) {
+                    const overlayScript = `<script src="/__overlay/${options.overlay}"></script>`;
+                    html = html.replace("</body>", `${overlayScript}</body>`);
+                  }
+                  res.end(html);
+                });
+              } else {
+                res.writeHead(proxyRes.statusCode || 200, headers);
+                proxyRes.pipe(res);
+              }
+            }
+          );
+
+          proxyReq.on("error", (err) => {
+            console.error("Proxy error:", err.message);
+            res.statusCode = 502;
+            res.end("Proxy error");
+          });
+
+          req.pipe(proxyReq);
+        });
+
+        server.listen(port, () => {
+          console.log(`\n🚀 Proxy server running at http://localhost:${port}`);
+          console.log(`   Proxying: ${options.proxy}`);
+          console.log(`   CSP headers: stripped`);
+          if (options.project) {
+            console.log(`   Dynamic analysis: ${options.project}`);
+            console.log(`   (overlay generated per-route automatically)`);
+          } else if (options.overlay) {
+            console.log(`   Static overlay: ${options.overlay}`);
+          }
+          console.log(`\n   Open http://localhost:${port} in your browser\n`);
+        });
+        return;
+      }
+
+      const server = createServer(async (req, res) => {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET");
+
+        if (req.url === "/" || req.url === "/index.html") {
+          const files = await fs.readdir(outputPath);
+          const overlays = files.filter((f) => f.endsWith("-overlay.js"));
+          res.setHeader("Content-Type", "text/html");
+          res.end(`<!DOCTYPE html><html><head><title>Overlay Server</title></head><body style="font-family:monospace;background:#0d1117;color:#c9d1d9;padding:24px;">
+<h2 style="color:#58a6ff;">Available Overlays</h2>
+<ul>${overlays
+            .map(
+              (f) => `<li><a href="/${f}" style="color:#7ee787;">${f}</a></li>`
+            )
+            .join("")}</ul>
+<h3 style="color:#58a6ff;margin-top:24px;">Quick Inject</h3>
+<p>Paste in browser console:</p>
+${overlays
+  .map(
+    (f) =>
+      `<pre style="background:#161b22;padding:12px;border-radius:6px;color:#ffa657;">fetch('http://localhost:${port}/${f}').then(r=>r.text()).then(eval)</pre>`
+  )
+  .join("")}
+</body></html>`);
+          return;
+        }
+
+        const file = req.url?.slice(1);
+        if (!file) {
+          res.statusCode = 404;
+          res.end("Not found");
+          return;
+        }
+
+        try {
+          const content = await fs.readFile(
+            path.join(outputPath, file),
+            "utf-8"
+          );
+          res.setHeader("Content-Type", "application/javascript");
+          res.end(content);
+        } catch {
+          res.statusCode = 404;
+          res.end("Not found");
+        }
+      });
+
+      server.listen(port, () => {
+        console.log(`\n🚀 Overlay server running at http://localhost:${port}`);
+        console.log(`   Serving from: ${outputPath}\n`);
+        console.log(`Quick inject (paste in browser console):`);
+        console.log(
+          `   fetch('http://localhost:${port}/route-u-tests2-overlay.js').then(r=>r.text()).then(eval)\n`
+        );
+      });
+    }
+  );
+
 program.parse();
