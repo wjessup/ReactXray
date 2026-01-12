@@ -618,8 +618,29 @@ function extractProps(node: Node): PropInfo[] {
           if (Node.isPropertySignature(member)) {
             props.push({
               name: member.getName(),
-              type: member.getType().getText(),
+              type: simplifyType(member.getType().getText()),
               optional: member.hasQuestionToken(),
+            });
+          }
+        }
+      } else {
+        const paramType = firstParam.getType();
+        const properties = paramType.getProperties();
+        for (const prop of properties) {
+          const declarations = prop.getDeclarations();
+          const decl = declarations[0];
+          if (decl && Node.isPropertySignature(decl)) {
+            props.push({
+              name: prop.getName(),
+              type: simplifyType(decl.getType().getText()),
+              optional: decl.hasQuestionToken(),
+            });
+          } else {
+            const propType = prop.getTypeAtLocation(node);
+            props.push({
+              name: prop.getName(),
+              type: simplifyType(propType.getText()),
+              optional: propType.isNullable(),
             });
           }
         }
@@ -628,6 +649,13 @@ function extractProps(node: Node): PropInfo[] {
   }
 
   return props;
+}
+
+function simplifyType(typeStr: string): string {
+  return typeStr
+    .replace(/import\([^)]+\)\./g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function findHooksInNode(node: Node): string[] {

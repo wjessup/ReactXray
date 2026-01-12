@@ -161,7 +161,9 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       border-radius: 6px;
       padding: 10px;
       z-index: 100000;
-      max-width: 280px;
+      max-width: 340px;
+      max-height: 80vh;
+      overflow-y: auto;
       box-shadow: 0 8px 24px rgba(0,0,0,0.4);
       pointer-events: none;
     }
@@ -170,6 +172,20 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     .ro-tooltip .info { color: #8b949e; font-size: 10px; margin: 3px 0; }
     .ro-tooltip .hooks { color: #ffa657; }
     .ro-tooltip .queries { color: #79c0ff; }
+    .ro-tooltip .props-section { margin-top: 6px; }
+    .ro-tooltip .prop { margin-left: 8px; font-family: 'SF Mono', monospace; font-size: 10px; color: #8b949e; }
+    .ro-tooltip .prop-name { color: #79c0ff; }
+    .ro-tooltip .prop-type { color: #7ee787; }
+    .ro-tooltip .live-section { margin-top: 6px; border-top: 1px solid #30363d; padding-top: 6px; }
+    .ro-tooltip .live-prop, .ro-tooltip .live-state { margin-left: 8px; font-family: 'SF Mono', monospace; font-size: 10px; }
+    .ro-tooltip .live-value { color: #ffa657; }
+    .ro-tooltip .network-section { margin-top: 6px; border-top: 1px solid #30363d; padding-top: 6px; }
+    .ro-tooltip .network-call { margin-left: 8px; font-family: 'SF Mono', monospace; font-size: 9px; display: flex; gap: 4px; }
+    .ro-tooltip .net-method { color: #d2a8ff; font-weight: bold; min-width: 28px; }
+    .ro-tooltip .net-url { color: #79c0ff; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+    .ro-tooltip .net-status { color: #7ee787; }
+    .ro-tooltip .net-status.error { color: #f85149; }
+    .ro-tooltip .net-time { color: #8b949e; }
     .ro-dom-highlight {
       position: fixed;
       pointer-events: none;
@@ -253,6 +269,54 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
   let highlightEl = null;
   let tooltip = null;
   let selectedHighlight = null;
+  
+  const networkRequests = [];
+  const componentNetworkMap = new Map();
+  
+  const originalFetch = window.fetch;
+  window.fetch = async function(...args) {
+    const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || 'unknown';
+    const method = args[1]?.method || 'GET';
+    const stack = new Error().stack || '';
+    const componentName = extractComponentFromStack(stack);
+    const startTime = performance.now();
+    
+    try {
+      const response = await originalFetch.apply(this, args);
+      const duration = Math.round(performance.now() - startTime);
+      const entry = { url: url.split('?')[0], method, status: response.status, duration, component: componentName, time: Date.now() };
+      networkRequests.unshift(entry);
+      if (networkRequests.length > 100) networkRequests.pop();
+      if (componentName) {
+        const list = componentNetworkMap.get(componentName) || [];
+        list.unshift(entry);
+        if (list.length > 20) list.pop();
+        componentNetworkMap.set(componentName, list);
+      }
+      return response;
+    } catch (err) {
+      const duration = Math.round(performance.now() - startTime);
+      const entry = { url: url.split('?')[0], method, status: 'error', duration, component: componentName, time: Date.now() };
+      networkRequests.unshift(entry);
+      if (componentName) {
+        const list = componentNetworkMap.get(componentName) || [];
+        list.unshift(entry);
+        componentNetworkMap.set(componentName, list);
+      }
+      throw err;
+    }
+  };
+  
+  function extractComponentFromStack(stack) {
+    const lines = stack.split('\\n');
+    for (const line of lines) {
+      const match = line.match(/at\\s+([A-Z][a-zA-Z0-9_]*)/);
+      if (match && !['Error', 'Object', 'Function', 'Promise', 'Array'].includes(match[1])) {
+        return match[1];
+      }
+    }
+    return null;
+  }
   let lastClickedNodeId = null;
   let cycleIndex = 0;
   let isPaused = false;
@@ -316,17 +380,65 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     return tooltip;
   }
 
-  function showTooltip(e, node) {
+  function showTooltip(e, node, domEl = null) {
     const t = createTooltip();
     const comp = node.component;
     const hooks = comp?.hooks?.length ? comp.hooks.join(', ') : '—';
     const queries = comp?.serverQueries?.length ? comp.serverQueries.join(', ') : '—';
+    const propsHtml = comp?.props?.length 
+      ? comp.props.map(p => \`<div class="prop">\${p.optional ? '?' : ''}<span class="prop-name">\${p.name}</span>: <span class="prop-type">\${p.type}</span></div>\`).join('')
+      : '<div class="prop">—</div>';
+    
+    let liveHtml = '';
+    let networkHtml = '';
+    
+    if (domEl && comp?.name) {
+      const live = getLiveComponentData(domEl, comp.name);
+      
+      if (live.props && Object.keys(live.props).length > 0) {
+        const livePropsHtml = Object.entries(live.props)
+          .filter(([k]) => !k.startsWith('__') && k !== 'children')
+          .slice(0, 8)
+          .map(([k, v]) => \`<div class="live-prop"><span class="prop-name">\${k}</span>: <span class="live-value">\${formatValue(v)}</span></div>\`)
+          .join('');
+        if (livePropsHtml) {
+          liveHtml += \`<div class="info live-section">Live Props:\${livePropsHtml}</div>\`;
+        }
+      }
+      
+      if (live.state && live.state.length > 0) {
+        const stateHtml = live.state
+          .slice(0, 5)
+          .map(s => \`<div class="live-state">[\${s.index}]: <span class="live-value">\${formatValue(s.value)}</span></div>\`)
+          .join('');
+        liveHtml += \`<div class="info live-section">State:\${stateHtml}</div>\`;
+      }
+      
+      if (live.networkCalls && live.networkCalls.length > 0) {
+        networkHtml = '<div class="info network-section">Network:' + 
+          live.networkCalls.slice(0, 5).map(n => 
+            \`<div class="network-call"><span class="net-method">\${n.method}</span> <span class="net-url">\${n.url.split('/').pop() || n.url}</span> <span class="net-status \${n.status >= 400 ? 'error' : ''}">\${n.status}</span> <span class="net-time">\${n.duration}ms</span></div>\`
+          ).join('') + '</div>';
+      }
+    }
+    
+    const componentNetworkCalls = componentNetworkMap.get(comp?.name) || [];
+    if (!networkHtml && componentNetworkCalls.length > 0) {
+      networkHtml = '<div class="info network-section">Network:' + 
+        componentNetworkCalls.slice(0, 5).map(n => 
+          \`<div class="network-call"><span class="net-method">\${n.method}</span> <span class="net-url">\${n.url.split('/').pop() || n.url}</span> <span class="net-status \${n.status >= 400 ? 'error' : ''}">\${n.status}</span> <span class="net-time">\${n.duration}ms</span></div>\`
+        ).join('') + '</div>';
+    }
+    
     t.innerHTML = \`
       <h4>\${comp?.name || '—'}</h4>
       <div class="file">\${node.file}</div>
       <div class="info">Type: <strong>\${comp?.isClientComponent ? 'Client' : 'Server'}</strong></div>
+      <div class="info props-section">Props (types):\${propsHtml}</div>
+      \${liveHtml}
       <div class="info hooks">Hooks: \${hooks}</div>
       <div class="info queries">Server Queries: \${queries}</div>
+      \${networkHtml}
     \`;
     t.style.display = 'block';
     const x = Math.min(e.clientX + 10, window.innerWidth - panelWidth - 300);
@@ -370,6 +482,59 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       if (type.type?.name) return type.type.name;
     }
     return null;
+  }
+  
+  function getLiveComponentData(el, componentName) {
+    const fiber = getReactFiber(el);
+    if (!fiber) return { props: null, state: null, networkCalls: [] };
+    
+    let targetFiber = fiber;
+    let current = fiber;
+    const seen = new Set();
+    while (current) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      const name = getFiberName(current);
+      if (name === componentName) {
+        targetFiber = current;
+        break;
+      }
+      current = current.return;
+    }
+    
+    const liveProps = targetFiber.memoizedProps || {};
+    const stateValues = [];
+    let stateNode = targetFiber.memoizedState;
+    let hookIndex = 0;
+    while (stateNode && hookIndex < 10) {
+      if (stateNode.memoizedState !== undefined && stateNode.memoizedState !== null) {
+        const val = stateNode.memoizedState;
+        if (typeof val !== 'function' && typeof val?.current === 'undefined') {
+          stateValues.push({ index: hookIndex, value: val });
+        }
+      }
+      stateNode = stateNode.next;
+      hookIndex++;
+    }
+    
+    const networkCalls = componentNetworkMap.get(componentName) || [];
+    
+    return { props: liveProps, state: stateValues, networkCalls };
+  }
+  
+  function formatValue(val, maxLen = 50) {
+    if (val === null) return 'null';
+    if (val === undefined) return 'undefined';
+    if (typeof val === 'string') return '"' + (val.length > maxLen ? val.slice(0, maxLen) + '...' : val) + '"';
+    if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+    if (Array.isArray(val)) return '[' + val.length + ' items]';
+    if (typeof val === 'object') {
+      const keys = Object.keys(val);
+      if (keys.length === 0) return '{}';
+      return '{' + keys.slice(0, 3).join(', ') + (keys.length > 3 ? '...' : '') + '}';
+    }
+    if (typeof val === 'function') return 'fn()';
+    return String(val).slice(0, maxLen);
   }
 
   function getComponentStack(el) {
@@ -605,7 +770,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       <div class="ro-header">
         <div class="ro-header-row">
           <h2>🧩 Component Overlay</h2>
-          <button class="ro-pause-btn" id="ro-pause-btn">\${isPaused ? '▶ Resume' : '⏸ Pause'}</button>
+          <button class="ro-pause-btn" id="ro-pause-btn" title="Ctrl+Shift+P">\${isPaused ? '▶ Resume' : '⏸ Pause'}</button>
         </div>
         <div class="ro-stats">
           <div class="ro-stat"><span class="ro-stat-value">\${STATS.totalComponents}</span><span class="ro-stat-label">total</span></div>
@@ -694,8 +859,8 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
         const nodeId = node.dataset.id;
         const treeNode = findNodeById(TREE, nodeId);
         if (treeNode) {
-          showTooltip(e, treeNode);
           const domEl = tryFindDomElement(treeNode, nodeId);
+          showTooltip(e, treeNode, domEl);
           if (domEl) showHighlight(domEl, name);
         }
       });
@@ -978,10 +1143,29 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       e.preventDefault();
       toggle();
     }
+    if (e.ctrlKey && e.shiftKey && e.key === 'P') {
+      e.preventDefault();
+      isPaused = !isPaused;
+      const pauseBtn = panel.querySelector('#ro-pause-btn');
+      if (pauseBtn) {
+        pauseBtn.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
+        pauseBtn.classList.toggle('paused', isPaused);
+      }
+      if (isPaused) {
+        disableInspectMode();
+      } else if (isOpen) {
+        enableInspectMode();
+      }
+    }
   });
 
   window.addEventListener('popstate', checkRouteChange);
   setInterval(checkRouteChange, 500);
+
+  ['mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup'].forEach(evt => {
+    panel.addEventListener(evt, (e) => e.stopPropagation());
+    toggleBtn.addEventListener(evt, (e) => e.stopPropagation());
+  });
 
   document.body.appendChild(panel);
   document.body.appendChild(toggleBtn);
