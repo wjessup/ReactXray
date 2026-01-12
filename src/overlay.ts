@@ -159,33 +159,109 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       background: #161b22;
       border: 1px solid #30363d;
       border-radius: 6px;
-      padding: 10px;
+      padding: 8px 10px;
       z-index: 100000;
-      max-width: 340px;
-      max-height: 80vh;
-      overflow-y: auto;
+      max-width: 220px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.4);
       pointer-events: none;
     }
-    .ro-tooltip h4 { color: #d2a8ff; margin: 0 0 6px 0; font-size: 12px; }
-    .ro-tooltip .file { color: #7ee787; font-size: 10px; margin-bottom: 6px; word-break: break-all; }
-    .ro-tooltip .info { color: #8b949e; font-size: 10px; margin: 3px 0; }
-    .ro-tooltip .hooks { color: #ffa657; }
-    .ro-tooltip .queries { color: #79c0ff; }
-    .ro-tooltip .props-section { margin-top: 6px; }
-    .ro-tooltip .prop { margin-left: 8px; font-family: 'SF Mono', monospace; font-size: 10px; color: #8b949e; }
-    .ro-tooltip .prop-name { color: #79c0ff; }
-    .ro-tooltip .prop-type { color: #7ee787; }
-    .ro-tooltip .live-section { margin-top: 6px; border-top: 1px solid #30363d; padding-top: 6px; }
-    .ro-tooltip .live-prop, .ro-tooltip .live-state { margin-left: 8px; font-family: 'SF Mono', monospace; font-size: 10px; }
-    .ro-tooltip .live-value { color: #ffa657; }
-    .ro-tooltip .network-section { margin-top: 6px; border-top: 1px solid #30363d; padding-top: 6px; }
-    .ro-tooltip .network-call { margin-left: 8px; font-family: 'SF Mono', monospace; font-size: 9px; display: flex; gap: 4px; }
-    .ro-tooltip .net-method { color: #d2a8ff; font-weight: bold; min-width: 28px; }
-    .ro-tooltip .net-url { color: #79c0ff; flex: 1; overflow: hidden; text-overflow: ellipsis; }
-    .ro-tooltip .net-status { color: #7ee787; }
-    .ro-tooltip .net-status.error { color: #f85149; }
-    .ro-tooltip .net-time { color: #8b949e; }
+    .ro-tooltip h4 { color: #d2a8ff; margin: 0 0 4px 0; font-size: 11px; }
+    .ro-tooltip .file { color: #7ee787; font-size: 9px; word-break: break-all; }
+    .ro-tooltip .tip { color: #8b949e; font-size: 9px; margin-top: 6px; font-style: italic; }
+    .ro-detail-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 100001;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(2px);
+    }
+    .ro-detail-dialog {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      width: 500px;
+      max-width: 90vw;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+    }
+    .ro-detail-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #30363d;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .ro-detail-header h3 { color: #d2a8ff; margin: 0; font-size: 16px; font-weight: 600; }
+    .ro-detail-header .file { color: #7ee787; font-size: 11px; margin-top: 4px; word-break: break-all; }
+    .ro-detail-header .badges { display: flex; gap: 6px; margin-top: 8px; }
+    .ro-detail-close {
+      background: none;
+      border: none;
+      color: #8b949e;
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+    }
+    .ro-detail-close:hover { color: #c9d1d9; }
+    .ro-detail-tabs {
+      display: flex;
+      border-bottom: 1px solid #30363d;
+      padding: 0 20px;
+      gap: 4px;
+    }
+    .ro-detail-tab {
+      background: none;
+      border: none;
+      color: #8b949e;
+      padding: 10px 12px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .ro-detail-tab:hover { color: #c9d1d9; }
+    .ro-detail-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .ro-detail-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+    }
+    .ro-detail-section { margin-bottom: 16px; }
+    .ro-detail-section:last-child { margin-bottom: 0; }
+    .ro-detail-section h4 { color: #8b949e; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 8px 0; }
+    .ro-detail-row { 
+      display: flex; 
+      padding: 6px 0; 
+      border-bottom: 1px solid #21262d;
+      font-size: 12px;
+    }
+    .ro-detail-row:last-child { border-bottom: none; }
+    .ro-detail-key { color: #79c0ff; min-width: 120px; flex-shrink: 0; }
+    .ro-detail-type { color: #7ee787; flex: 1; font-family: 'SF Mono', monospace; font-size: 11px; }
+    .ro-detail-value { color: #ffa657; flex: 1; font-family: 'SF Mono', monospace; font-size: 11px; word-break: break-all; }
+    .ro-detail-optional { color: #8b949e; margin-right: 4px; }
+    .ro-detail-empty { color: #484f58; font-style: italic; font-size: 12px; }
+    .ro-net-row { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid #21262d; font-size: 11px; }
+    .ro-net-row:last-child { border-bottom: none; }
+    .ro-net-method { color: #d2a8ff; font-weight: 600; min-width: 40px; }
+    .ro-net-url { color: #79c0ff; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ro-net-status { min-width: 30px; }
+    .ro-net-status.ok { color: #7ee787; }
+    .ro-net-status.err { color: #f85149; }
+    .ro-net-time { color: #8b949e; min-width: 50px; text-align: right; }
+    .ro-hooks-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ro-hook-tag { background: #21262d; color: #ffa657; padding: 4px 8px; border-radius: 4px; font-size: 11px; }
     .ro-dom-highlight {
       position: fixed;
       pointer-events: none;
@@ -383,69 +459,178 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
   function showTooltip(e, node, domEl = null) {
     const t = createTooltip();
     const comp = node.component;
-    const hooks = comp?.hooks?.length ? comp.hooks.join(', ') : '—';
-    const queries = comp?.serverQueries?.length ? comp.serverQueries.join(', ') : '—';
-    const propsHtml = comp?.props?.length 
-      ? comp.props.map(p => \`<div class="prop">\${p.optional ? '?' : ''}<span class="prop-name">\${p.name}</span>: <span class="prop-type">\${p.type}</span></div>\`).join('')
-      : '<div class="prop">—</div>';
-    
-    let liveHtml = '';
-    let networkHtml = '';
-    
-    if (domEl && comp?.name) {
-      const live = getLiveComponentData(domEl, comp.name);
-      
-      if (live.props && Object.keys(live.props).length > 0) {
-        const livePropsHtml = Object.entries(live.props)
-          .filter(([k]) => !k.startsWith('__') && k !== 'children')
-          .slice(0, 8)
-          .map(([k, v]) => \`<div class="live-prop"><span class="prop-name">\${k}</span>: <span class="live-value">\${formatValue(v)}</span></div>\`)
-          .join('');
-        if (livePropsHtml) {
-          liveHtml += \`<div class="info live-section">Live Props:\${livePropsHtml}</div>\`;
-        }
-      }
-      
-      if (live.state && live.state.length > 0) {
-        const stateHtml = live.state
-          .slice(0, 5)
-          .map(s => \`<div class="live-state">[\${s.index}]: <span class="live-value">\${formatValue(s.value)}</span></div>\`)
-          .join('');
-        liveHtml += \`<div class="info live-section">State:\${stateHtml}</div>\`;
-      }
-      
-      if (live.networkCalls && live.networkCalls.length > 0) {
-        networkHtml = '<div class="info network-section">Network:' + 
-          live.networkCalls.slice(0, 5).map(n => 
-            \`<div class="network-call"><span class="net-method">\${n.method}</span> <span class="net-url">\${n.url.split('/').pop() || n.url}</span> <span class="net-status \${n.status >= 400 ? 'error' : ''}">\${n.status}</span> <span class="net-time">\${n.duration}ms</span></div>\`
-          ).join('') + '</div>';
-      }
-    }
-    
-    const componentNetworkCalls = componentNetworkMap.get(comp?.name) || [];
-    if (!networkHtml && componentNetworkCalls.length > 0) {
-      networkHtml = '<div class="info network-section">Network:' + 
-        componentNetworkCalls.slice(0, 5).map(n => 
-          \`<div class="network-call"><span class="net-method">\${n.method}</span> <span class="net-url">\${n.url.split('/').pop() || n.url}</span> <span class="net-status \${n.status >= 400 ? 'error' : ''}">\${n.status}</span> <span class="net-time">\${n.duration}ms</span></div>\`
-        ).join('') + '</div>';
-    }
-    
     t.innerHTML = \`
       <h4>\${comp?.name || '—'}</h4>
       <div class="file">\${node.file}</div>
-      <div class="info">Type: <strong>\${comp?.isClientComponent ? 'Client' : 'Server'}</strong></div>
-      <div class="info props-section">Props (types):\${propsHtml}</div>
-      \${liveHtml}
-      <div class="info hooks">Hooks: \${hooks}</div>
-      <div class="info queries">Server Queries: \${queries}</div>
-      \${networkHtml}
+      <div class="tip">Click for details</div>
     \`;
     t.style.display = 'block';
-    const x = Math.min(e.clientX + 10, window.innerWidth - panelWidth - 300);
-    const y = Math.min(e.clientY + 10, window.innerHeight - 180);
+    const x = Math.min(e.clientX + 10, window.innerWidth - panelWidth - 240);
+    const y = Math.min(e.clientY + 10, window.innerHeight - 80);
     t.style.left = x + 'px';
     t.style.top = y + 'px';
   }
+  
+  let detailOverlay = null;
+  let currentDetailNode = null;
+  let currentDetailDomEl = null;
+  let currentTab = 'props';
+  
+  function handleDetailClick(e) {
+    const target = e.target;
+    
+    if (target === detailOverlay) {
+      hideDetailDialog();
+      return;
+    }
+    
+    if (target.classList && target.classList.contains('ro-detail-close')) {
+      hideDetailDialog();
+      return;
+    }
+    
+    if (target.classList && target.classList.contains('ro-detail-tab')) {
+      const newTab = target.getAttribute('data-tab');
+      if (newTab && newTab !== currentTab) {
+        currentTab = newTab;
+        renderDetailDialog();
+      }
+      return;
+    }
+    
+    const tabParent = target.closest && target.closest('.ro-detail-tab');
+    if (tabParent) {
+      const newTab = tabParent.getAttribute('data-tab');
+      if (newTab && newTab !== currentTab) {
+        currentTab = newTab;
+        renderDetailDialog();
+      }
+    }
+  }
+  
+  function showDetailDialog(node, domEl) {
+    currentDetailNode = node;
+    currentDetailDomEl = domEl;
+    currentTab = 'props';
+    
+    if (!detailOverlay) {
+      detailOverlay = document.createElement('div');
+      detailOverlay.className = 'ro-detail-overlay';
+      detailOverlay.addEventListener('click', handleDetailClick);
+      document.body.appendChild(detailOverlay);
+    }
+    
+    renderDetailDialog();
+    detailOverlay.style.display = 'flex';
+  }
+  
+  function hideDetailDialog() {
+    if (detailOverlay) detailOverlay.style.display = 'none';
+    currentDetailNode = null;
+    currentDetailDomEl = null;
+  }
+  
+  function renderDetailDialog() {
+    if (!detailOverlay || !currentDetailNode) return;
+    
+    const node = currentDetailNode;
+    const domEl = currentDetailDomEl;
+    const comp = node.component;
+    const live = domEl && comp?.name ? getLiveComponentData(domEl, comp.name) : { props: {}, state: [], networkCalls: [] };
+    const networkCalls = live.networkCalls.length > 0 ? live.networkCalls : (componentNetworkMap.get(comp?.name) || []);
+    
+    const tabs = [
+      { id: 'props', label: 'Props', count: comp?.props?.length || 0 },
+      { id: 'live', label: 'Live Values', count: Object.keys(live.props || {}).filter(k => !k.startsWith('__') && k !== 'children').length },
+      { id: 'state', label: 'State', count: live.state?.length || 0 },
+      { id: 'hooks', label: 'Hooks', count: comp?.hooks?.length || 0 },
+      { id: 'network', label: 'Network', count: networkCalls.length },
+    ];
+    
+    const tabsHtml = tabs.map(t => 
+      \`<button class="ro-detail-tab \${currentTab === t.id ? 'active' : ''}" data-tab="\${t.id}">\${t.label}\${t.count ? ' (' + t.count + ')' : ''}</button>\`
+    ).join('');
+    
+    let contentHtml = '';
+    
+    if (currentTab === 'props') {
+      if (comp?.props?.length) {
+        contentHtml = comp.props.map(p => \`
+          <div class="ro-detail-row">
+            <div class="ro-detail-key">\${p.optional ? '<span class="ro-detail-optional">?</span>' : ''}\${p.name}</div>
+            <div class="ro-detail-type">\${p.type}</div>
+          </div>
+        \`).join('');
+      } else {
+        contentHtml = '<div class="ro-detail-empty">No props defined</div>';
+      }
+    } else if (currentTab === 'live') {
+      const liveProps = Object.entries(live.props || {}).filter(([k]) => !k.startsWith('__') && k !== 'children');
+      if (liveProps.length) {
+        contentHtml = liveProps.map(([k, v]) => \`
+          <div class="ro-detail-row">
+            <div class="ro-detail-key">\${k}</div>
+            <div class="ro-detail-value">\${formatValue(v, 100)}</div>
+          </div>
+        \`).join('');
+      } else {
+        contentHtml = '<div class="ro-detail-empty">No live props available (component may not be mounted)</div>';
+      }
+    } else if (currentTab === 'state') {
+      if (live.state?.length) {
+        contentHtml = live.state.map(s => \`
+          <div class="ro-detail-row">
+            <div class="ro-detail-key">useState[\${s.index}]</div>
+            <div class="ro-detail-value">\${formatValue(s.value, 100)}</div>
+          </div>
+        \`).join('');
+      } else {
+        contentHtml = '<div class="ro-detail-empty">No state hooks found</div>';
+      }
+    } else if (currentTab === 'hooks') {
+      if (comp?.hooks?.length) {
+        contentHtml = '<div class="ro-hooks-list">' + comp.hooks.map(h => \`<span class="ro-hook-tag">\${h}</span>\`).join('') + '</div>';
+        if (comp.serverQueries?.length) {
+          contentHtml += '<div class="ro-detail-section" style="margin-top:16px"><h4>Server Queries</h4>';
+          contentHtml += comp.serverQueries.map(q => \`<div class="ro-detail-row"><div class="ro-detail-key">\${q}</div></div>\`).join('');
+          contentHtml += '</div>';
+        }
+      } else {
+        contentHtml = '<div class="ro-detail-empty">No hooks used</div>';
+      }
+    } else if (currentTab === 'network') {
+      if (networkCalls.length) {
+        contentHtml = networkCalls.map(n => \`
+          <div class="ro-net-row">
+            <div class="ro-net-method">\${n.method}</div>
+            <div class="ro-net-url" title="\${n.url}">\${n.url}</div>
+            <div class="ro-net-status \${n.status >= 400 || n.status === 'error' ? 'err' : 'ok'}">\${n.status}</div>
+            <div class="ro-net-time">\${n.duration}ms</div>
+          </div>
+        \`).join('');
+      } else {
+        contentHtml = '<div class="ro-detail-empty">No network requests tracked for this component</div>';
+      }
+    }
+    
+    detailOverlay.innerHTML = \`
+      <div class="ro-detail-dialog">
+        <div class="ro-detail-header">
+          <div>
+            <h3>\${comp?.name || 'Unknown'}</h3>
+            <div class="file">\${node.file}</div>
+            <div class="badges">
+              <span class="ro-badge \${comp?.isClientComponent ? 'client' : 'server'}">\${comp?.isClientComponent ? 'Client' : 'Server'}</span>
+            </div>
+          </div>
+          <button class="ro-detail-close" title="Close (Esc)">&times;</button>
+        </div>
+        <div class="ro-detail-tabs">\${tabsHtml}</div>
+        <div class="ro-detail-content">\${contentHtml}</div>
+      </div>
+    \`;
+    
+    }
 
   function hideTooltip() {
     if (tooltip) tooltip.style.display = 'none';
@@ -726,6 +911,18 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     if (selectedHighlight) selectedHighlight.style.display = 'none';
   }
 
+  function nodeMatchesSearch(node, term) {
+    if (!term) return true;
+    const lowerTerm = term.toLowerCase();
+    const name = node.component?.name || '';
+    if (name.toLowerCase().includes(lowerTerm)) return true;
+    if (node.file.toLowerCase().includes(lowerTerm)) return true;
+    for (const child of node.children) {
+      if (nodeMatchesSearch(child, term)) return true;
+    }
+    return false;
+  }
+  
   function renderTree(nodes, depth = 0, pathPrefix = '') {
     return nodes.map((node, i) => {
       const nodeId = pathPrefix ? pathPrefix + '-' + i : String(i);
@@ -736,9 +933,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       const isClient = comp?.isClientComponent;
       const hooks = comp?.hooks?.length ? comp.hooks.slice(0, 2).join(', ') + (comp.hooks.length > 2 ? '...' : '') : '';
       
-      const matchesSearch = !searchTerm || 
-        name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        node.file.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = nodeMatchesSearch(node, searchTerm);
       
       const childrenHtml = hasChildren ? \`<div class="ro-children">\${renderTree(node.children, depth + 1, nodeId)}</div>\` : '';
       
@@ -820,9 +1015,19 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
   function attachNodeEvents() {
     panel.querySelectorAll('.ro-node-header').forEach(header => {
       const node = header.parentElement;
+      const toggle = header.querySelector('.ro-toggle');
+      
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (node.querySelector('.ro-children')) {
+          node.classList.toggle('ro-collapsed');
+        }
+      });
       
       header.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (e.target === toggle) return;
+        
         const name = node.dataset.name;
         const nodeId = node.dataset.id;
         const treeNode = findNodeById(TREE, nodeId);
@@ -830,6 +1035,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
         panel.querySelectorAll('.ro-node-header.selected').forEach(el => el.classList.remove('selected'));
         header.classList.add('selected');
         
+        let domEl = null;
         if (treeNode) {
           const allMatches = findAllMatchingElements(treeNode, nodeId);
           if (allMatches.length > 0) {
@@ -839,7 +1045,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
               cycleIndex = 0;
               lastClickedNodeId = nodeId;
             }
-            const domEl = allMatches[cycleIndex];
+            domEl = allMatches[cycleIndex];
             const label = allMatches.length > 1 ? name + ' (' + (cycleIndex + 1) + '/' + allMatches.length + ')' : name;
             showSelectedHighlight(domEl, label);
             domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -847,10 +1053,8 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
             hideSelectedHighlight();
             lastClickedNodeId = null;
           }
-        }
-        
-        if (node.querySelector('.ro-children')) {
-          node.classList.toggle('ro-collapsed');
+          
+          showDetailDialog(treeNode, domEl);
         }
       });
 
@@ -870,7 +1074,8 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
         hideHighlight();
       });
 
-      header.addEventListener('dblclick', () => {
+      header.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
         const file = node.dataset.file;
         window.open(\`vscode://file/\${file}\`);
       });
@@ -1048,7 +1253,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       showHighlight(el, label);
     };
     inspectClickHandler = (e) => {
-      if (e.target.closest('#repo-overlay-panel') || e.target.closest('#repo-overlay-toggle')) return;
+      if (e.target.closest('#repo-overlay-panel') || e.target.closest('#repo-overlay-toggle') || e.target.closest('.ro-detail-overlay')) return;
       e.preventDefault();
       e.stopPropagation();
       const el = e.target;
@@ -1139,6 +1344,10 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
 
   toggleBtn.addEventListener('click', toggle);
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && detailOverlay?.style.display === 'flex') {
+      hideDetailDialog();
+      return;
+    }
     if (e.ctrlKey && e.shiftKey && e.key === 'C') {
       e.preventDefault();
       toggle();
