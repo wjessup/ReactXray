@@ -653,8 +653,8 @@ function extractProps(node: Node): PropInfo[] {
 
 function simplifyType(typeStr: string): string {
   return typeStr
-    .replace(/import\([^)]+\)\./g, '')
-    .replace(/\s+/g, ' ')
+    .replace(/import\([^)]+\)\./g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
