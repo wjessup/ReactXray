@@ -153,6 +153,22 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     .ro-badge.client { background: #388bfd33; color: #58a6ff; }
     .ro-badge.server { background: #238636; color: #7ee787; }
     .ro-hooks { color: #ffa657; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ro-render-count {
+      font-size: 9px;
+      padding: 1px 4px;
+      border-radius: 8px;
+      background: #f8514922;
+      color: #f85149;
+      font-weight: 600;
+      min-width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .ro-render-count.hot { background: #f8514944; animation: ro-pulse 0.3s ease-out; }
+    @keyframes ro-pulse {
+      0% { transform: scale(1.3); background: #f85149; color: white; }
+      100% { transform: scale(1); }
+    }
     .ro-children { padding-left: 10px; }
     .ro-tooltip {
       position: fixed;
@@ -393,6 +409,68 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
     }
     return null;
   }
+
+  const renderCounts = new Map();
+  let totalRenders = 0;
+  
+  function trackRender(componentName) {
+    if (!componentName) return;
+    const count = (renderCounts.get(componentName) || 0) + 1;
+    renderCounts.set(componentName, count);
+    totalRenders++;
+    
+    document.querySelectorAll(\`.ro-node[data-name="\${componentName}"] .ro-render-count\`).forEach(countEl => {
+      countEl.textContent = count;
+      countEl.style.opacity = '1';
+      countEl.classList.add('hot');
+      setTimeout(() => countEl.classList.remove('hot'), 300);
+    });
+    
+    const totalEl = document.querySelector('#ro-total-renders');
+    if (totalEl) totalEl.textContent = totalRenders;
+  }
+  
+  function findChangedFibers(fiber, seen = new Set()) {
+    if (!fiber || seen.has(fiber)) return;
+    seen.add(fiber);
+    
+    const dominated = fiber.flags !== undefined ? fiber.flags : fiber.effectTag;
+    const hasUpdate = dominated && (dominated & 0b0000000000000000000000100) !== 0;
+    const hasCallback = dominated && (dominated & 0b0000000000000000000100000) !== 0;
+    const didWork = hasUpdate || hasCallback || (fiber.alternate && fiber.memoizedState !== fiber.alternate.memoizedState);
+    
+    if (didWork) {
+      const name = getFiberName(fiber);
+      if (name) trackRender(name);
+    }
+    
+    if (fiber.child) findChangedFibers(fiber.child, seen);
+    if (fiber.sibling) findChangedFibers(fiber.sibling, seen);
+  }
+  
+  function setupRenderTracking() {
+    const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (!hook) return false;
+    
+    const originalOnCommitFiberRoot = hook.onCommitFiberRoot;
+    hook.onCommitFiberRoot = function(rendererID, fiberRoot, ...args) {
+      if (originalOnCommitFiberRoot) {
+        originalOnCommitFiberRoot.call(this, rendererID, fiberRoot, ...args);
+      }
+      
+      try {
+        const current = fiberRoot.current;
+        if (current) {
+          findChangedFibers(current, new Set());
+        }
+      } catch (e) {}
+    };
+    
+    return true;
+  }
+  
+  const hasDevToolsHook = setupRenderTracking();
+
   let lastClickedNodeId = null;
   let cycleIndex = 0;
   let isPaused = false;
@@ -932,6 +1010,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
       const name = comp?.name || '—';
       const isClient = comp?.isClientComponent;
       const hooks = comp?.hooks?.length ? comp.hooks.slice(0, 2).join(', ') + (comp.hooks.length > 2 ? '...' : '') : '';
+      const renderCount = renderCounts.get(name) || 0;
       
       const matchesSearch = nodeMatchesSearch(node, searchTerm);
       
@@ -942,6 +1021,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
           <div class="ro-node-header">
             <span class="ro-toggle">\${hasChildren ? '▼' : '•'}</span>
             <span class="ro-name">\${name}</span>
+            <span class="ro-render-count" style="\${renderCount === 0 ? 'opacity:0.3' : ''}">\${renderCount}</span>
             <span class="ro-file">\${fileName}</span>
             <span class="ro-badge \${isClient ? 'client' : 'server'}">\${isClient ? 'C' : 'S'}</span>
             \${hooks ? \`<span class="ro-hooks">\${hooks}</span>\` : ''}
@@ -971,6 +1051,7 @@ export function generateOverlayScript(data: RouteComponentAnalysis): string {
           <div class="ro-stat"><span class="ro-stat-value">\${STATS.totalComponents}</span><span class="ro-stat-label">total</span></div>
           <div class="ro-stat"><span class="ro-stat-value">\${STATS.clientComponents}</span><span class="ro-stat-label">client</span></div>
           <div class="ro-stat"><span class="ro-stat-value">\${STATS.serverComponents}</span><span class="ro-stat-label">server</span></div>
+          <div class="ro-stat"><span class="ro-stat-value" id="ro-total-renders" style="color:#f85149">\${totalRenders}</span><span class="ro-stat-label">renders</span></div>
         </div>
         <div class="route">\${ROUTE}</div>
       </div>
