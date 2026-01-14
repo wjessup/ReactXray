@@ -1,5 +1,23 @@
 import { Node, SourceFile } from "ts-morph";
-import type { PropInfo, ComponentInfo } from "../types.js";
+import path from "path";
+import type { PropInfo, ComponentInfo, NextjsFileType } from "../types.js";
+
+const NEXTJS_FILE_CONVENTIONS: Record<string, NextjsFileType> = {
+  page: "page",
+  layout: "layout",
+  loading: "loading",
+  error: "error",
+  "not-found": "not-found",
+  template: "template",
+  route: "route",
+  default: "default",
+};
+
+function detectNextjsFileType(filePath: string): NextjsFileType {
+  const basename = path.basename(filePath);
+  const nameWithoutExt = basename.replace(/\.(tsx?|jsx?)$/, "");
+  return NEXTJS_FILE_CONVENTIONS[nameWithoutExt] || null;
+}
 
 const REACT_HOOKS = [
   "useState",
@@ -38,6 +56,7 @@ export function extractComponentFromFile(
     fileText.includes('"use client"') || fileText.includes("'use client'");
   const isServerComponent =
     fileText.includes('"use server"') || fileText.includes("'use server'");
+  const nextjsFileType = detectNextjsFileType(relativePath);
 
   const defaultExport = sourceFile.getDefaultExportSymbol();
   if (defaultExport) {
@@ -46,7 +65,8 @@ export function extractComponentFromFile(
         decl,
         relativePath,
         isClientComponent,
-        isServerComponent
+        isServerComponent,
+        nextjsFileType
       );
       if (info) return info;
     }
@@ -59,7 +79,8 @@ export function extractComponentFromFile(
         decl,
         relativePath,
         isClientComponent,
-        isServerComponent
+        isServerComponent,
+        nextjsFileType
       );
       if (info) {
         info.name = name;
@@ -75,7 +96,8 @@ function extractFromNode(
   node: Node,
   filePath: string,
   isClientComponent: boolean,
-  isServerComponent: boolean
+  isServerComponent: boolean,
+  nextjsFileType: NextjsFileType
 ): ComponentInfo | null {
   if (
     Node.isFunctionDeclaration(node) ||
@@ -95,6 +117,7 @@ function extractFromNode(
       serverQueries: isClientComponent ? [] : findServerQueries(node),
       isClientComponent,
       isServerComponent,
+      nextjsFileType,
     };
   }
 
@@ -115,6 +138,7 @@ function extractFromNode(
         serverQueries: isClientComponent ? [] : findServerQueries(init),
         isClientComponent,
         isServerComponent,
+        nextjsFileType,
       };
     }
   }

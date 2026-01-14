@@ -447,6 +447,9 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       const matches = nodeMatchesSearch(node, searchTerm);
       const childrenHtml = hasChildren ? '<div class="children">' + renderTree(node.children, depth + 1, nodeId) + '</div>' : '';
 
+      const nextjsType = comp?.nextjsFileType;
+      const nextjsBadge = nextjsType ? '<span class="badge nextjs">' + nextjsType.toUpperCase() + '</span>' : '';
+
       return \`
         <div class="node \${matches ? '' : 'hidden'}" data-depth="\${depth}" data-name="\${name}" data-file="\${node.file}" data-id="\${nodeId}">
           <div class="node-header">
@@ -455,6 +458,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
             <span class="render-count" style="\${renderCount === 0 ? 'opacity:0.3' : ''}">\${renderCount}</span>
             <span class="file">\${fileName}</span>
             <span class="badge \${isClient ? 'client' : 'server'}">\${isClient ? 'C' : 'S'}</span>
+            \${nextjsBadge}
             \${hooks ? '<span class="hooks">' + hooks + '</span>' : ''}
           </div>
           \${childrenHtml}
@@ -679,6 +683,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       } else contentHtml = '<div class="detail-empty">No network requests tracked</div>';
     }
 
+    const nextjsTypeBadge = comp?.nextjsFileType ? '<span class="badge nextjs">' + comp.nextjsFileType.toUpperCase() + '</span>' : '';
+
     detailOverlay.innerHTML = \`
       <div class="detail-dialog">
         <div class="detail-header">
@@ -687,6 +693,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
             <div class="file">\${node.file}</div>
             <div class="badges">
               <span class="badge \${comp?.isClientComponent ? 'client' : 'server'}">\${comp?.isClientComponent ? 'Client' : 'Server'}</span>
+              \${nextjsTypeBadge}
             </div>
           </div>
           <button class="detail-close">×</button>

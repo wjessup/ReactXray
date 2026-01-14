@@ -160,6 +160,7 @@ export const OVERLAY_CSS = `
 
   .badge.client { background: #388bfd33; color: #58a6ff; }
   .badge.server { background: #238636; color: #7ee787; }
+  .badge.nextjs { background: #8b5cf6; color: #fff; }
 
   .hooks {
     color: #ffa657;

@@ -4,6 +4,17 @@ export interface PropInfo {
   optional: boolean;
 }
 
+export type NextjsFileType =
+  | "page"
+  | "layout"
+  | "loading"
+  | "error"
+  | "not-found"
+  | "template"
+  | "route"
+  | "default"
+  | null;
+
 export interface ComponentInfo {
   name: string;
   filePath: string;
@@ -12,6 +23,7 @@ export interface ComponentInfo {
   serverQueries: string[];
   isClientComponent: boolean;
   isServerComponent: boolean;
+  nextjsFileType: NextjsFileType;
 }
 
 export interface ComponentTreeNode {
