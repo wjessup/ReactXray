@@ -14,7 +14,7 @@ import type {
   RouteInfo,
   ProjectAnalysis,
 } from "../types.js";
-import { extractComponentFromFile, findHooks, extractJsxChildrenFromFile } from "./ast.js";
+import { extractComponentFromFile, findHooks, extractJsxChildren, extractJsxUsage, JsxUsage } from "./ast.js";
 import { buildImportGraph } from "./imports.js";
 import { resolveRouteFiles } from "./routes.js";
 
@@ -70,7 +70,7 @@ export async function analyzeRoute(
   );
 
   const componentMap = new Map<string, ComponentInfo>();
-  const jsxChildrenMap = new Map<string, string[]>();
+  const jsxUsageMap = new Map<string, JsxUsage>();
   const nameToFileMap = new Map<string, string>();
   
   for (const absPath of visited) {
@@ -83,8 +83,8 @@ export async function analyzeRoute(
           componentMap.set(relPath, info);
           nameToFileMap.set(info.name, relPath);
         }
-        const jsxChildren = extractJsxChildrenFromFile(sourceFile);
-        jsxChildrenMap.set(relPath, jsxChildren);
+        const jsxUsage = extractJsxUsage(sourceFile);
+        jsxUsageMap.set(relPath, jsxUsage);
       }
     }
   }
@@ -92,7 +92,7 @@ export async function analyzeRoute(
   const componentTree = buildComponentTree(
     entryFiles,
     targetPath,
-    jsxChildrenMap,
+    jsxUsageMap,
     nameToFileMap,
     componentMap
   );
@@ -115,38 +115,107 @@ export async function analyzeRoute(
 function buildComponentTree(
   entryFiles: RouteAnalysis["entryFiles"],
   targetPath: string,
-  jsxChildrenMap: Map<string, string[]>,
+  jsxUsageMap: Map<string, JsxUsage>,
   nameToFileMap: Map<string, string>,
   componentMap: Map<string, ComponentInfo>
 ): ComponentTreeNode[] {
   const globalVisited = new Set<string>();
+
+  function getAllJsxFromFile(file: string): string[] {
+    const jsxUsage = jsxUsageMap.get(file);
+    if (!jsxUsage) return [];
+    const all = new Set<string>(jsxUsage.directChildren);
+    for (const nested of jsxUsage.nestedInComponent.values()) {
+      for (const name of nested) all.add(name);
+    }
+    return Array.from(all);
+  }
+
+  function buildFromFile(
+    file: string,
+    callerJsxUsage: JsxUsage | null,
+    fromComponentName: string | null
+  ): ComponentTreeNode {
+    if (globalVisited.has(file)) {
+      return { file, component: componentMap.get(file) || null, children: [] };
+    }
+    globalVisited.add(file);
+
+    const children: ComponentTreeNode[] = [];
+    const fileJsxUsage = jsxUsageMap.get(file);
+    
+    const passedAsChildren = fromComponentName && callerJsxUsage 
+      ? callerJsxUsage.nestedInComponent.get(fromComponentName) || []
+      : [];
+
+    for (const childName of passedAsChildren) {
+      const childFile = nameToFileMap.get(childName);
+      if (childFile && !globalVisited.has(childFile)) {
+        const nestedInChild = callerJsxUsage?.nestedInComponent.get(childName) || [];
+        children.push(buildWithPassedChildren(childFile, childName, nestedInChild, callerJsxUsage));
+      }
+    }
+
+    const ownJsx = getAllJsxFromFile(file);
+    for (const childName of ownJsx) {
+      const childFile = nameToFileMap.get(childName);
+      if (childFile && !globalVisited.has(childFile)) {
+        children.push(buildFromFile(childFile, fileJsxUsage || null, childName));
+      }
+    }
+
+    return { file, component: componentMap.get(file) || null, children };
+  }
+
+  function buildWithPassedChildren(
+    file: string,
+    componentName: string,
+    passedChildren: string[],
+    callerJsxUsage: JsxUsage | null
+  ): ComponentTreeNode {
+    if (globalVisited.has(file)) {
+      return { file, component: componentMap.get(file) || null, children: [] };
+    }
+    globalVisited.add(file);
+
+    const children: ComponentTreeNode[] = [];
+    const fileJsxUsage = jsxUsageMap.get(file);
+
+    for (const childName of passedChildren) {
+      const childFile = nameToFileMap.get(childName);
+      if (childFile && !globalVisited.has(childFile)) {
+        const nestedInChild = callerJsxUsage?.nestedInComponent.get(childName) || [];
+        children.push(buildWithPassedChildren(childFile, childName, nestedInChild, callerJsxUsage));
+      }
+    }
+
+    const ownJsx = getAllJsxFromFile(file);
+    for (const childName of ownJsx) {
+      const childFile = nameToFileMap.get(childName);
+      if (childFile && !globalVisited.has(childFile)) {
+        children.push(buildFromFile(childFile, fileJsxUsage || null, childName));
+      }
+    }
+
+    return { file, component: componentMap.get(file) || null, children };
+  }
 
   const buildNode = (
     absPath: string,
     childSlot: ComponentTreeNode | null
   ): ComponentTreeNode => {
     const file = path.relative(targetPath, absPath);
-    globalVisited.add(file);
+    const node = buildFromFile(file, null, null);
     
-    const jsxChildren = jsxChildrenMap.get(file) || [];
-    const children: ComponentTreeNode[] = [];
-
-    for (const childName of jsxChildren) {
-      const childFile = nameToFileMap.get(childName);
-      if (childFile && !globalVisited.has(childFile)) {
-        children.push(buildFromJsx(childFile, jsxChildrenMap, nameToFileMap, componentMap, globalVisited));
-      }
-    }
-
     if (childSlot) {
-      children.push({
+      node.children.push({
         file: "{children}",
         component: null,
         children: [childSlot],
       });
     }
 
-    return { file, component: componentMap.get(file) || null, children };
+    return node;
   };
 
   let innermost: ComponentTreeNode | null = null;
@@ -163,31 +232,6 @@ function buildComponentTree(
   if (entryFiles.notFound) result.push(buildNode(entryFiles.notFound, null));
 
   return result;
-}
-
-function buildFromJsx(
-  file: string,
-  jsxChildrenMap: Map<string, string[]>,
-  nameToFileMap: Map<string, string>,
-  componentMap: Map<string, ComponentInfo>,
-  globalVisited: Set<string>
-): ComponentTreeNode {
-  if (globalVisited.has(file)) {
-    return { file, component: componentMap.get(file) || null, children: [] };
-  }
-  globalVisited.add(file);
-
-  const jsxChildren = jsxChildrenMap.get(file) || [];
-  const children: ComponentTreeNode[] = [];
-  
-  for (const childName of jsxChildren) {
-    const childFile = nameToFileMap.get(childName);
-    if (childFile && !globalVisited.has(childFile)) {
-      children.push(buildFromJsx(childFile, jsxChildrenMap, nameToFileMap, componentMap, globalVisited));
-    }
-  }
-
-  return { file, component: componentMap.get(file) || null, children };
 }
 
 export async function analyzeDependencies(

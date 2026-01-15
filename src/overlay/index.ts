@@ -535,6 +535,12 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   function renderPanel() {
+    const treeContent = isLoading 
+      ? '<div class="loading"><div class="loading-spinner"></div><div class="loading-text">Analyzing components...</div></div>'
+      : TREE.length === 0
+        ? '<div class="loading"><div class="loading-text">No components found</div></div>'
+        : renderTree(TREE);
+
     container.innerHTML = \`
       <div class="panel \${isOpen ? 'open' : ''}">
         <div class="resize-handle"></div>
@@ -556,7 +562,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         </div>
         <div class="tree-container">
           <div class="sticky-parents"></div>
-          <div class="tree">\${renderTree(TREE)}</div>
+          <div class="tree">\${treeContent}</div>
         </div>
       </div>
       <button class="toggle-btn \${isOpen ? 'open' : ''}">\${isOpen ? '✕' : '🔍'}</button>

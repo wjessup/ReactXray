@@ -4,6 +4,15 @@ import fs from "fs/promises";
 import path from "path";
 import { analyzeRoute } from "./analyze/index.js";
 import { generateOverlayScript } from "./overlay/index.js";
+import type { ComponentTreeNode } from "./types.js";
+
+function countTreeNodes(nodes: ComponentTreeNode[]): number {
+  let count = nodes.length;
+  for (const node of nodes) {
+    count += countTreeNodes(node.children);
+  }
+  return count;
+}
 
 interface ServerOptions {
   port: number;
@@ -30,7 +39,7 @@ export function startServer(options: ServerOptions): void {
       const result = await analyzeRoute(projectPath, route);
       const script = generateOverlayScript(result);
       overlayCache.set(route, { script, time: Date.now() });
-      console.log(`  ✓ Generated overlay (${result.stats.totalComponents} components)`);
+      console.log(`  ✓ Generated overlay (${result.stats.totalComponents} components, ${countTreeNodes(result.componentTree)} tree nodes)`);
       return script;
     } catch (err) {
       console.error(`  ✗ Failed to analyze route ${route}:`, (err as Error).message);
@@ -101,7 +110,7 @@ function startProxyServer(
           componentTree: result.componentTree,
           stats: result.stats,
         }));
-        console.log(`  ✓ Data ready (${result.stats.totalComponents} components)`);
+        console.log(`  ✓ Data ready (${result.stats.totalComponents} components, ${countTreeNodes(result.componentTree)} tree nodes)`);
       } catch (err) {
         console.error(`  ✗ Failed:`, (err as Error).message);
         res.statusCode = 500;

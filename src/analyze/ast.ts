@@ -236,23 +236,69 @@ export function findHooks(node: Node): string[] {
   return hooks;
 }
 
-export function findJsxChildren(node: Node): string[] {
-  const children = new Set<string>();
-  const text = node.getText();
+export interface JsxUsage {
+  directChildren: string[];
+  nestedInComponent: Map<string, string[]>;
+}
+
+function getJsxTagName(node: Node): string | null {
+  if (Node.isJsxElement(node)) {
+    const tagName = node.getOpeningElement().getTagNameNode().getText();
+    if (/^[A-Z]/.test(tagName) && tagName !== 'Fragment') return tagName;
+  } else if (Node.isJsxSelfClosingElement(node)) {
+    const tagName = node.getTagNameNode().getText();
+    if (/^[A-Z]/.test(tagName) && tagName !== 'Fragment') return tagName;
+  }
+  return null;
+}
+
+export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
+  const directChildren = new Set<string>();
+  const nestedInComponent = new Map<string, Set<string>>();
   
-  const jsxTagRegex = /<([A-Z][a-zA-Z0-9_]*)[\s/>]/g;
-  let match;
-  while ((match = jsxTagRegex.exec(text)) !== null) {
-    const tagName = match[1];
-    if (tagName !== 'Fragment') {
-      children.add(tagName);
+  function processNode(node: Node, parentComponentName: string | null) {
+    const tagName = getJsxTagName(node);
+    
+    if (tagName) {
+      if (parentComponentName) {
+        if (!nestedInComponent.has(parentComponentName)) {
+          nestedInComponent.set(parentComponentName, new Set());
+        }
+        nestedInComponent.get(parentComponentName)!.add(tagName);
+      } else {
+        directChildren.add(tagName);
+      }
+      
+      if (Node.isJsxElement(node)) {
+        node.getJsxChildren().forEach(child => processNode(child, tagName));
+      }
+    } else {
+      node.forEachChild(child => processNode(child, parentComponentName));
     }
   }
   
-  return Array.from(children);
+  sourceFile.forEachDescendant(node => {
+    if (Node.isReturnStatement(node)) {
+      const expr = node.getExpression();
+      if (expr) {
+        processNode(expr, null);
+      }
+    }
+  });
+  
+  const result: JsxUsage = {
+    directChildren: Array.from(directChildren),
+    nestedInComponent: new Map()
+  };
+  
+  for (const [parent, children] of nestedInComponent) {
+    result.nestedInComponent.set(parent, Array.from(children));
+  }
+  
+  return result;
 }
 
-export function extractJsxChildrenFromFile(sourceFile: SourceFile): string[] {
+export function extractJsxChildren(sourceFile: SourceFile): string[] {
   const children = new Set<string>();
   const text = sourceFile.getFullText();
   
