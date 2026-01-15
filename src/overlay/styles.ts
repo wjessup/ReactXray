@@ -170,6 +170,16 @@ export const OVERLAY_CSS = `
     white-space: nowrap;
   }
 
+  .info-btn {
+    color: #6e7681;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0 2px;
+    flex-shrink: 0;
+  }
+
+  .info-btn:hover { color: #58a6ff; }
+
   .render-count {
     font-size: 9px;
     padding: 1px 4px;

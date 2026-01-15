@@ -31,6 +31,37 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   const networkRequests = [];
   const componentNetworkMap = new Map();
 
+  let selectedFiber = null;
+  let selectedElement = null;
+
+  function getDomFromFiber(fiber) {
+    if (!fiber) return null;
+    if (fiber.stateNode instanceof Element) return fiber.stateNode;
+    let child = fiber.child;
+    while (child) {
+      if (child.stateNode instanceof Element) return child.stateNode;
+      child = child.child;
+    }
+    return null;
+  }
+
+  function getFiberFromElement(el) {
+    const fiber = getReactFiber(el);
+    if (!fiber) return null;
+    let current = fiber;
+    const seen = new Set();
+    while (current) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      const name = getFiberName(current);
+      if (name && !/^[a-z]/.test(name) && name !== 'Fragment') {
+        return current;
+      }
+      current = current.return;
+    }
+    return fiber;
+  }
+
   const host = document.createElement('div');
   host.id = OVERLAY_ID;
   const shadow = host.attachShadow({ mode: 'open' });
@@ -133,25 +164,41 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return false;
   }
 
-  function trackRender(name) {
-    if (!name) return;
-    const count = (renderCounts.get(name) || 0) + 1;
-    renderCounts.set(name, count);
-    totalRenders++;
+  let pendingRenderUpdates = new Set();
+  let renderUpdateScheduled = false;
 
-    shadow.querySelectorAll(\`.node[data-name="\${name}"] .render-count\`).forEach(el => {
-      el.textContent = count;
-      el.style.opacity = '1';
-      el.classList.add('hot');
-      setTimeout(() => el.classList.remove('hot'), 300);
-    });
+  function flushRenderUpdates() {
+    renderUpdateScheduled = false;
+    if (isPaused) return;
+
+    for (const name of pendingRenderUpdates) {
+      const count = renderCounts.get(name) || 0;
+      shadow.querySelectorAll(\`.node[data-name="\${name}"] .render-count\`).forEach(el => {
+        el.textContent = count;
+        el.style.opacity = '1';
+      });
+    }
+    pendingRenderUpdates.clear();
 
     const totalEl = shadow.querySelector('#total-renders');
     if (totalEl) totalEl.textContent = totalRenders;
   }
 
+  function trackRender(name) {
+    if (!name || isPaused) return;
+    const count = (renderCounts.get(name) || 0) + 1;
+    renderCounts.set(name, count);
+    totalRenders++;
+
+    pendingRenderUpdates.add(name);
+    if (!renderUpdateScheduled) {
+      renderUpdateScheduled = true;
+      requestAnimationFrame(flushRenderUpdates);
+    }
+  }
+
   function findChangedFibers(fiber, seen) {
-    if (!fiber || seen.has(fiber)) return;
+    if (!fiber || seen.has(fiber) || isPaused) return;
     seen.add(fiber);
 
     if (isOverlayFiber(fiber)) return;
@@ -328,56 +375,67 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return false;
   }
 
-  function getAncestorNames(nodeId) {
+  function getParentName(nodeId) {
     const parts = nodeId.split('-').map(Number);
-    const ancestors = [];
+    if (parts.length < 2) return null;
     let current = TREE;
     for (let i = 0; i < parts.length - 1; i++) {
       const node = current[parts[i]];
-      if (node?.component?.name) ancestors.push(node.component.name);
-      current = node?.children || [];
+      if (!node) return null;
+      if (i === parts.length - 2) return node.component?.name || null;
+      current = node.children || [];
     }
-    return ancestors;
+    return null;
   }
 
-  function getFiberAncestorNames(el) {
+  function getSiblingIndex(nodeId) {
+    const parts = nodeId.split('-').map(Number);
+    if (parts.length === 0) return 0;
+    
+    let current = TREE;
+    for (let i = 0; i < parts.length - 1; i++) {
+      current = current[parts[i]]?.children || [];
+    }
+    
+    const idx = parts[parts.length - 1];
+    const node = current[idx];
+    if (!node?.component?.name) return 0;
+    
+    const name = node.component.name;
+    let sibIdx = 0;
+    for (let i = 0; i < idx; i++) {
+      if (current[i]?.component?.name === name) sibIdx++;
+    }
+    return sibIdx;
+  }
+
+  function getFiberParentName(el) {
     const fiber = getReactFiber(el);
-    if (!fiber) return [];
-    const ancestors = [];
+    if (!fiber) return null;
     let current = fiber.return;
     const seen = new Set();
-    while (current && ancestors.length < 50) {
+    while (current) {
       if (seen.has(current)) break;
       seen.add(current);
       const name = getFiberName(current);
-      if (name) ancestors.push(name);
+      if (name) return name;
       current = current.return;
     }
-    return ancestors;
+    return null;
   }
 
-  function scoreMatch(treeAncestors, fiberAncestors) {
-    const treeRev = [...treeAncestors].reverse();
-    let bestRun = 0;
-
-    for (let fStart = 0; fStart < fiberAncestors.length; fStart++) {
-      let run = 0, tIdx = 0, fIdx = fStart;
-      while (tIdx < treeRev.length && fIdx < fiberAncestors.length) {
-        if (treeRev[tIdx] === fiberAncestors[fIdx]) { run++; tIdx++; fIdx++; }
-        else { fIdx++; if (fIdx - fStart > tIdx + 5) break; }
-      }
-      bestRun = Math.max(bestRun, run);
+  function getFiberSiblingIndex(el, componentName) {
+    const fiber = getReactFiber(el);
+    if (!fiber?.return) return 0;
+    
+    let child = fiber.return.child;
+    let idx = 0;
+    while (child) {
+      if (child === fiber) return idx;
+      if (getFiberName(child) === componentName) idx++;
+      child = child.sibling;
     }
-
-    let immediateParentMatch = 0;
-    if (treeAncestors.length > 0 && fiberAncestors.length > 0) {
-      const parent = treeAncestors[treeAncestors.length - 1];
-      for (let i = 0; i < Math.min(3, fiberAncestors.length); i++) {
-        if (fiberAncestors[i] === parent) { immediateParentMatch = 10 - i; break; }
-      }
-    }
-
-    return bestRun * 5 + immediateParentMatch;
+    return 0;
   }
 
   function findBestMatchingElement(node, nodeId) {
@@ -387,16 +445,20 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     if (allMatches.length === 0) return null;
     if (allMatches.length === 1) return allMatches[0];
 
-    const treeAncestors = getAncestorNames(nodeId);
-    if (treeAncestors.length === 0) return allMatches[0];
+    const parentName = getParentName(nodeId);
+    const sibIdx = getSiblingIndex(nodeId);
 
-    let best = allMatches[0];
-    let bestScore = -1;
     for (const el of allMatches) {
-      const score = scoreMatch(treeAncestors, getFiberAncestorNames(el));
-      if (score > bestScore) { bestScore = score; best = el; }
+      if (getFiberParentName(el) === parentName && getFiberSiblingIndex(el, name) === sibIdx) {
+        return el;
+      }
     }
-    return best;
+
+    for (const el of allMatches) {
+      if (getFiberParentName(el) === parentName) return el;
+    }
+
+    return allMatches[0];
   }
 
   function findAllMatchingElements(node, nodeId) {
@@ -405,14 +467,18 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     const allMatches = findElementsByComponentName(name);
     if (allMatches.length <= 1) return allMatches;
 
-    const treeAncestors = getAncestorNames(nodeId);
-    if (treeAncestors.length === 0) return allMatches;
+    const parentName = getParentName(nodeId);
+    const sibIdx = getSiblingIndex(nodeId);
 
-    const scored = allMatches.map(el => ({ el, score: scoreMatch(treeAncestors, getFiberAncestorNames(el)) }));
-    scored.sort((a, b) => b.score - a.score);
+    const withParent = allMatches.filter(el => getFiberParentName(el) === parentName);
+    if (withParent.length === 0) return allMatches;
 
-    const topScore = scored[0].score;
-    return topScore > 0 ? scored.filter(s => s.score === topScore).map(s => s.el) : allMatches;
+    const exactMatch = withParent.find(el => getFiberSiblingIndex(el, name) === sibIdx);
+    if (exactMatch) {
+      return [exactMatch, ...withParent.filter(el => el !== exactMatch)];
+    }
+
+    return withParent;
   }
 
   function findNodeById(nodes, id, prefix = '') {
@@ -455,6 +521,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
           <div class="node-header">
             <span class="toggle">\${hasChildren ? '▼' : '•'}</span>
             <span class="name">\${name}</span>
+            <span class="info-btn" title="View details">…</span>
             <span class="render-count" style="\${renderCount === 0 ? 'opacity:0.3' : ''}">\${renderCount}</span>
             <span class="file">\${fileName}</span>
             <span class="badge \${isClient ? 'client' : 'server'}">\${isClient ? 'C' : 'S'}</span>
@@ -547,42 +614,46 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   function attachNodeEvents() {
     shadow.querySelectorAll('.node-header').forEach(header => {
       const node = header.parentElement;
-      const toggle = header.querySelector('.toggle');
 
-      toggle.addEventListener('click', e => {
-        e.stopPropagation(); e.stopImmediatePropagation();
-        if (node.querySelector('.children')) node.classList.toggle('collapsed');
-      }, { capture: true });
-
-      header.addEventListener('click', e => {
-        e.stopPropagation(); e.stopImmediatePropagation();
-        if (e.target === toggle) return;
-
+      function selectNode() {
         const name = node.dataset.name;
         const nodeId = node.dataset.id;
-        const treeNode = findNodeById(TREE, nodeId);
 
         shadow.querySelectorAll('.node-header.selected').forEach(el => el.classList.remove('selected'));
         header.classList.add('selected');
 
+        const treeNode = findNodeById(TREE, nodeId);
         let domEl = null;
-        if (treeNode) {
-          const allMatches = findAllMatchingElements(treeNode, nodeId);
-          if (allMatches.length > 0) {
-            if (lastClickedNodeId === nodeId) cycleIndex = (cycleIndex + 1) % allMatches.length;
-            else { cycleIndex = 0; lastClickedNodeId = nodeId; }
 
-            domEl = allMatches[cycleIndex];
-            const label = allMatches.length > 1 ? name + ' (' + (cycleIndex + 1) + '/' + allMatches.length + ')' : name;
-            showSelectedHighlight(domEl, label);
-            domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          } else {
-            hideSelectedHighlight();
-            lastClickedNodeId = null;
-          }
-
-          showDetailDialog(treeNode, domEl);
+        if (selectedFiber && getFiberName(selectedFiber) === name) {
+          domEl = selectedElement || getDomFromFiber(selectedFiber);
         }
+
+        if (domEl && document.contains(domEl)) {
+          showSelectedHighlight(domEl, name);
+          domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          hideSelectedHighlight();
+        }
+
+        selectedFiber = null;
+        selectedElement = null;
+
+        return { treeNode, domEl };
+      }
+
+      header.addEventListener('click', e => {
+        e.stopPropagation(); e.stopImmediatePropagation();
+        if (e.target.classList.contains('toggle')) {
+          if (node.querySelector('.children')) node.classList.toggle('collapsed');
+          return;
+        }
+        if (e.target.classList.contains('info-btn')) {
+          const { treeNode, domEl } = selectNode();
+          if (treeNode) showDetailDialog(treeNode, domEl);
+          return;
+        }
+        selectNode();
       }, { capture: true });
 
       header.addEventListener('mouseenter', e => {
@@ -721,14 +792,19 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       e.stopPropagation();
       e.stopImmediatePropagation();
 
-      const stack = getComponentStack(e.target);
-      console.log('%c🧩 Component Stack', 'color: #d2a8ff; font-weight: bold; font-size: 14px');
-      stack.forEach((name, i) => console.log('  '.repeat(i) + '↳ ' + name));
-      console.log('Element:', e.target);
+      const fiber = getFiberFromElement(e.target);
+      const name = fiber ? getFiberName(fiber) : null;
+      const domEl = fiber ? getDomFromFiber(fiber) : e.target;
 
-      if (stack.length > 0) {
-        selectTreeNodeByStack(stack);
-        showSelectedHighlight(e.target, stack[0]);
+      console.log('%c🧩 Selected:', 'color: #d2a8ff; font-weight: bold', name || 'Unknown', domEl);
+
+      if (name) {
+        selectedFiber = fiber;
+        selectedElement = domEl;
+
+        const stack = getComponentStack(e.target);
+        const nodeId = selectTreeNodeByStack(stack);
+        showSelectedHighlight(domEl, name);
       }
     };
 
@@ -744,19 +820,60 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   function selectTreeNodeByStack(stack) {
+    const result = findNodeByAncestry(TREE, stack, '', []);
+    if (result && selectTreeNodeById(result.nodeId)) return result.nodeId;
+
     for (const name of stack) {
-      const result = findNodeWithId(TREE, name);
-      if (result && selectTreeNodeById(result.nodeId)) return true;
+      const fallback = findFirstNodeWithName(TREE, name);
+      if (fallback && selectTreeNodeById(fallback.nodeId)) return fallback.nodeId;
     }
-    return false;
+    return null;
   }
 
-  function findNodeWithId(nodes, name, prefix = '') {
+  function findNodeByAncestry(nodes, stack, prefix, currentPath) {
+    if (stack.length === 0) return null;
+    const targetName = stack[0];
+    const parentNames = stack.slice(1);
+
+    let bestMatch = null;
+    let bestScore = -1;
+
+    for (let i = 0; i < nodes.length; i++) {
+      const nodeId = prefix ? prefix + '-' + i : String(i);
+      const nodeName = nodes[i].component?.name;
+      const newPath = nodeName ? [...currentPath, nodeName] : currentPath;
+
+      if (nodeName === targetName) {
+        let score = 0;
+        const pathRev = [...currentPath].reverse();
+        for (let j = 0; j < Math.min(parentNames.length, pathRev.length); j++) {
+          if (parentNames[j] === pathRev[j]) score += 10 - j;
+        }
+        if (score > bestScore || (score === bestScore && !bestMatch)) {
+          bestScore = score;
+          bestMatch = { node: nodes[i], nodeId };
+        }
+      }
+
+      if (nodes[i].children.length) {
+        const childResult = findNodeByAncestry(nodes[i].children, stack, nodeId, newPath);
+        if (childResult && childResult.score > bestScore) {
+          bestScore = childResult.score;
+          bestMatch = childResult;
+        }
+      }
+    }
+
+    if (bestMatch) bestMatch.score = bestScore;
+    return bestMatch;
+  }
+
+  function findFirstNodeWithName(nodes, name, prefix = '') {
     for (let i = 0; i < nodes.length; i++) {
       const nodeId = prefix ? prefix + '-' + i : String(i);
       if (nodes[i].component?.name === name) return { node: nodes[i], nodeId };
       if (nodes[i].children.length) {
-        const found = findNodeWithId(nodes[i].children, name, nodeId);
+        const found = findFirstNodeWithName(nodes[i].children, name, nodeId);
         if (found) return found;
       }
     }
