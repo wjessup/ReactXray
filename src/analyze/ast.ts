@@ -236,6 +236,38 @@ export function findHooks(node: Node): string[] {
   return hooks;
 }
 
+export function findJsxChildren(node: Node): string[] {
+  const children = new Set<string>();
+  const text = node.getText();
+  
+  const jsxTagRegex = /<([A-Z][a-zA-Z0-9_]*)[\s/>]/g;
+  let match;
+  while ((match = jsxTagRegex.exec(text)) !== null) {
+    const tagName = match[1];
+    if (tagName !== 'Fragment') {
+      children.add(tagName);
+    }
+  }
+  
+  return Array.from(children);
+}
+
+export function extractJsxChildrenFromFile(sourceFile: SourceFile): string[] {
+  const children = new Set<string>();
+  const text = sourceFile.getFullText();
+  
+  const jsxTagRegex = /<([A-Z][a-zA-Z0-9_]*)[\s/>]/g;
+  let match;
+  while ((match = jsxTagRegex.exec(text)) !== null) {
+    const tagName = match[1];
+    if (tagName !== 'Fragment') {
+      children.add(tagName);
+    }
+  }
+  
+  return Array.from(children);
+}
+
 function findServerQueries(node: Node): string[] {
   const queries: string[] = [];
   const text = node.getText();

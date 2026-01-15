@@ -103,6 +103,46 @@ export const OVERLAY_CSS = `
 
   .search input:focus { outline: none; border-color: #58a6ff; }
 
+  .tree-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .sticky-parents {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 6px 12px;
+    display: none;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    font-size: 11px;
+  }
+
+  .sticky-parents.visible { display: flex; }
+
+  .sticky-crumb {
+    color: #8b949e;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .sticky-crumb:hover { background: #21262d; color: #c9d1d9; }
+
+  .sticky-crumb .crumb-name { color: #d2a8ff; }
+
+  .sticky-sep { color: #484f58; font-size: 9px; }
+
   .tree {
     flex: 1;
     overflow-y: auto;

@@ -554,7 +554,10 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         <div class="search">
           <input type="text" placeholder="Search components..." value="\${searchTerm}">
         </div>
-        <div class="tree">\${renderTree(TREE)}</div>
+        <div class="tree-container">
+          <div class="sticky-parents"></div>
+          <div class="tree">\${renderTree(TREE)}</div>
+        </div>
       </div>
       <button class="toggle-btn \${isOpen ? 'open' : ''}">\${isOpen ? '✕' : '🔍'}</button>
     \`;
@@ -608,6 +611,100 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       else if (isOpen) enableInspectMode();
     }, { capture: true });
 
+    const treeEl = shadow.querySelector('.tree');
+    const stickyParents = shadow.querySelector('.sticky-parents');
+
+    function getAncestorsForNode(nodeEl) {
+      const ancestors = [];
+      let parent = nodeEl?.parentElement;
+      while (parent) {
+        if (parent.classList.contains('node')) {
+          const name = parent.dataset.name;
+          const nodeId = parent.dataset.id;
+          if (name && name !== '—') ancestors.unshift({ name, nodeId });
+        }
+        if (parent.classList.contains('tree')) break;
+        parent = parent.parentElement;
+      }
+      return ancestors;
+    }
+
+    function renderStickyParents(ancestors) {
+      if (!stickyParents) return;
+      if (ancestors.length === 0) {
+        stickyParents.classList.remove('visible');
+        return;
+      }
+
+      stickyParents.innerHTML = ancestors.map((a, i) => 
+        (i > 0 ? '<span class="sticky-sep">›</span>' : '') +
+        '<span class="sticky-crumb" data-id="' + a.nodeId + '"><span class="crumb-name">' + a.name + '</span></span>'
+      ).join('');
+      stickyParents.classList.add('visible');
+
+      stickyParents.querySelectorAll('.sticky-crumb').forEach(crumb => {
+        crumb.addEventListener('click', e => {
+          e.stopPropagation();
+          const nodeId = crumb.dataset.id;
+          const nodeEl = treeEl.querySelector('.node[data-id="' + nodeId + '"]');
+          if (nodeEl) {
+            const header = nodeEl.querySelector(':scope > .node-header');
+            if (header) header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        });
+      });
+    }
+
+    function updateStickyParentsForSelected() {
+      const selectedHeader = shadow.querySelector('.node-header.selected');
+      if (selectedHeader) {
+        const nodeEl = selectedHeader.parentElement;
+        renderStickyParents(getAncestorsForNode(nodeEl));
+        return;
+      }
+      updateStickyParentsForScroll();
+    }
+
+    function updateStickyParentsForScroll() {
+      if (!treeEl || !stickyParents) return;
+      
+      const selectedHeader = shadow.querySelector('.node-header.selected');
+      if (selectedHeader) return;
+      
+      const treeRect = treeEl.getBoundingClientRect();
+      const scrollTop = treeEl.scrollTop;
+      
+      if (scrollTop < 20) {
+        stickyParents.classList.remove('visible');
+        return;
+      }
+
+      let topNode = null;
+      let topOffset = Infinity;
+      
+      treeEl.querySelectorAll('.node').forEach(node => {
+        const header = node.querySelector(':scope > .node-header');
+        if (!header) return;
+        const rect = header.getBoundingClientRect();
+        const offset = rect.top - treeRect.top;
+        if (offset >= -10 && offset < topOffset) {
+          topOffset = offset;
+          topNode = node;
+        }
+      });
+
+      if (!topNode) {
+        stickyParents.classList.remove('visible');
+        return;
+      }
+
+      renderStickyParents(getAncestorsForNode(topNode));
+    }
+
+    window.__updateStickyParents = updateStickyParentsForSelected;
+
+    treeEl.addEventListener('scroll', updateStickyParentsForScroll, { passive: true });
+
     attachNodeEvents();
   }
 
@@ -650,10 +747,12 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         }
         if (e.target.classList.contains('info-btn')) {
           const { treeNode, domEl } = selectNode();
+          if (window.__updateStickyParents) window.__updateStickyParents();
           if (treeNode) showDetailDialog(treeNode, domEl);
           return;
         }
         selectNode();
+        if (window.__updateStickyParents) window.__updateStickyParents();
       }, { capture: true });
 
       header.addEventListener('mouseenter', e => {
@@ -896,7 +995,10 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     const header = nodeEl.querySelector(':scope > .node-header');
     if (header) {
       header.classList.add('selected');
-      setTimeout(() => header.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+      setTimeout(() => {
+        header.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (window.__updateStickyParents) window.__updateStickyParents();
+      }, 100);
     }
     return true;
   }
@@ -975,7 +1077,10 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     show: () => { if (!isOpen) toggle(); },
     hide: () => { if (isOpen) toggle(); },
     setWidth: w => { panelWidth = w; shadow.querySelector(':host').style.setProperty('--panel-width', w + 'px'); localStorage.setItem('ro-panel-width', w.toString()); },
-    reload: reloadData
+    reload: reloadData,
+    getTree: () => TREE,
+    logTree: () => console.log(JSON.stringify(TREE, null, 2)),
+    copyTree: () => { navigator.clipboard.writeText(JSON.stringify(TREE, null, 2)); console.log('Tree copied to clipboard'); }
   };
 })();`;
 }
