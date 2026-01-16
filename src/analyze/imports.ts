@@ -1,6 +1,7 @@
 import { Project, SourceFile } from "ts-morph";
 import path from "path";
 import fs from "fs";
+import type { ProjectJsxExports, ResolvedJsxImport } from "../types.js";
 
 const EXTENSIONS = [".tsx", ".ts", ".jsx", ".js"];
 
@@ -97,4 +98,59 @@ export function buildImportGraph(
   }
 
   return { visited, graph };
+}
+
+export function resolveJsxImports(
+  sourceFile: SourceFile,
+  projectJsxExports: ProjectJsxExports,
+  targetPath: string
+): ResolvedJsxImport[] {
+  const result: ResolvedJsxImport[] = [];
+  const filePath = sourceFile.getFilePath();
+
+  for (const decl of sourceFile.getImportDeclarations()) {
+    const specifier = decl.getModuleSpecifierValue();
+    if (!specifier.startsWith(".") && !specifier.startsWith("@/")) continue;
+
+    let resolvedPath: string | undefined = decl.getModuleSpecifierSourceFile()?.getFilePath();
+    if (!resolvedPath) {
+      resolvedPath = resolveImportPath(specifier, filePath, targetPath) || undefined;
+    }
+    if (!resolvedPath || resolvedPath.includes("node_modules")) continue;
+
+    const relPath = path.relative(targetPath, resolvedPath);
+    const fileExports = projectJsxExports.byFile.get(relPath);
+    if (!fileExports || fileExports.length === 0) continue;
+
+    const namedImports = decl.getNamedImports();
+    for (const namedImport of namedImports) {
+      const importedName = namedImport.getName();
+      const aliasNode = namedImport.getAliasNode();
+      const localName = aliasNode ? aliasNode.getText() : importedName;
+
+      const matchingExport = fileExports.find((e) => e.exportName === importedName);
+      if (matchingExport) {
+        result.push({
+          localName,
+          sourceFile: relPath,
+          jsxExport: matchingExport,
+        });
+      }
+    }
+
+    const defaultImport = decl.getDefaultImport();
+    if (defaultImport) {
+      const localName = defaultImport.getText();
+      const defaultExport = fileExports.find((e) => e.exportName === "default");
+      if (defaultExport) {
+        result.push({
+          localName,
+          sourceFile: relPath,
+          jsxExport: defaultExport,
+        });
+      }
+    }
+  }
+
+  return result;
 }

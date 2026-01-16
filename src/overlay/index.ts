@@ -14,14 +14,14 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
   const OVERLAY_ID = '__repo_overlay_' + Math.random().toString(36).slice(2);
 
-  let TREE = ${treeJson};
+  const STATIC_TREE = ${treeJson};
+  let TREE = JSON.parse(JSON.stringify(STATIC_TREE));
   let STATS = ${statsJson};
   let ROUTE = ${routeJson};
 
   let panelWidth = parseInt(localStorage.getItem('ro-panel-width') || '380', 10);
   let isOpen = false;
-  let isLoading = false;
-  let currentPath = window.location.pathname;
+  let isLoading = true;
   let isPaused = false;
   let searchTerm = '';
 
@@ -37,12 +37,43 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   function getDomFromFiber(fiber) {
     if (!fiber) return null;
     if (fiber.stateNode instanceof Element) return fiber.stateNode;
-    let child = fiber.child;
-    while (child) {
-      if (child.stateNode instanceof Element) return child.stateNode;
-      child = child.child;
+    
+    const elements = [];
+    function collectElements(f, depth = 0) {
+      if (!f || depth > 50) return;
+      if (f.stateNode instanceof Element) {
+        elements.push(f.stateNode);
+        return;
+      }
+      let child = f.child;
+      while (child) {
+        collectElements(child, depth + 1);
+        child = child.sibling;
+      }
     }
-    return null;
+    collectElements(fiber);
+    
+    if (elements.length === 0) return null;
+    if (elements.length === 1) return elements[0];
+    
+    let minTop = Infinity, minLeft = Infinity, maxBottom = 0, maxRight = 0;
+    for (const el of elements) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      minTop = Math.min(minTop, rect.top);
+      minLeft = Math.min(minLeft, rect.left);
+      maxBottom = Math.max(maxBottom, rect.bottom);
+      maxRight = Math.max(maxRight, rect.right);
+    }
+    
+    return {
+      getBoundingClientRect: () => ({
+        top: minTop, left: minLeft, bottom: maxBottom, right: maxRight,
+        width: maxRight - minLeft, height: maxBottom - minTop,
+        x: minLeft, y: minTop
+      }),
+      _elements: elements
+    };
   }
 
   function getFiberFromElement(el) {
@@ -91,8 +122,13 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   function showHoverHighlight(el, label) {
+    if (!el) return;
     const hl = createHoverHighlight();
     const rect = el.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0 || !isFinite(rect.top)) {
+      hl.style.display = 'none';
+      return;
+    }
     hl.style.cssText = \`
       position:fixed;top:\${rect.top}px;left:\${rect.left}px;
       width:\${rect.width}px;height:\${rect.height}px;display:block;
@@ -114,8 +150,13 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   function showSelectedHighlight(el, label) {
+    if (!el) return;
     const hl = createSelectedHighlight();
     const rect = el.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0 || !isFinite(rect.top)) {
+      hl.style.display = 'none';
+      return;
+    }
     hl.style.cssText = \`
       position:absolute;top:\${rect.top + window.scrollY}px;left:\${rect.left + window.scrollX}px;
       width:\${rect.width}px;height:\${rect.height}px;display:block;
@@ -155,6 +196,274 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       current = current.parentElement;
     }
     return false;
+  }
+
+  function findReactRoot() {
+    const candidates = [
+      document.getElementById('root'),
+      document.getElementById('__next'),
+      document.documentElement,
+      document.body
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      const containerKey = Object.keys(el).find(k =>
+        k.startsWith('__reactContainer$') || k.startsWith('_reactRootContainer')
+      );
+      if (containerKey) {
+        const container = el[containerKey];
+        if (container?.current) return container;
+        if (container?._internalRoot) return container._internalRoot;
+        if (container) return container;
+      }
+
+      const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
+      if (fiberKey) {
+        let fiber = el[fiberKey];
+        while (fiber.return) {
+          fiber = fiber.return;
+        }
+        return { current: fiber };
+      }
+    }
+    return null;
+  }
+
+  function extractSourceLocation(fiber) {
+    if (fiber._debugSource) {
+      return { fileName: fiber._debugSource.fileName, lineNumber: fiber._debugSource.lineNumber };
+    }
+    if (fiber.type?.__source) {
+      return { fileName: fiber.type.__source.fileName, lineNumber: fiber.type.__source.lineNumber };
+    }
+    if (fiber.type?._source) {
+      return { fileName: fiber.type._source.fileName, lineNumber: fiber.type._source.lineNumber };
+    }
+    return null;
+  }
+
+  function buildFiberTree(fiber, depth = 0) {
+    if (!fiber || depth > 150) return [];
+    const nodes = [];
+    let current = fiber;
+    const seen = new Set();
+    while (current) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      const name = getFiberName(current);
+      const source = extractSourceLocation(current);
+      if (name && !/^[a-z]/.test(name) && name !== 'Fragment') {
+        nodes.push({
+          name,
+          source,
+          children: buildFiberTree(current.child, depth + 1),
+          fiber: current
+        });
+      } else if (current.child) {
+        nodes.push(...buildFiberTree(current.child, depth + 1));
+      }
+      current = current.sibling;
+    }
+    return nodes;
+  }
+
+  function captureFullFiberTree() {
+    const root = findReactRoot();
+    if (!root?.current) return [];
+    return buildFiberTree(root.current);
+  }
+
+  function convertFiberTreeToDisplayFormat(fiberNodes, staticNamesInPath = new Set()) {
+    return fiberNodes
+      .filter(node => !staticNamesInPath.has(node.name))
+      .map(node => {
+        const staticInfo = staticComponentMap.get(node.name);
+        return {
+          file: staticInfo?.filePath || node.source?.fileName || 'unknown',
+          component: staticInfo || { name: node.name },
+          children: convertFiberTreeToDisplayFormat(node.children, staticNamesInPath),
+          source: node.source,
+          fiber: node.fiber,
+          hasFiber: true,
+        };
+      });
+  }
+
+  let FIBER_TREE = [];
+  let componentAllowlist = new Set();
+  let allowlistLoaded = false;
+  let filterEnabled = true;
+  
+  const staticComponentMap = new Map();
+  
+  function buildStaticComponentMap(nodes) {
+    for (const node of nodes) {
+      if (node.component && node.component.name) {
+        if (!staticComponentMap.has(node.component.name)) {
+          staticComponentMap.set(node.component.name, node.component);
+        }
+      }
+      if (node.children) buildStaticComponentMap(node.children);
+    }
+  }
+  
+  buildStaticComponentMap(STATIC_TREE);
+
+  async function loadComponentAllowlist() {
+    try {
+      const res = await fetch('/__overlay_allowlist.json');
+      const data = await res.json();
+      if (data.components && Array.isArray(data.components)) {
+        componentAllowlist = new Set(data.components);
+        allowlistLoaded = true;
+        console.log('[Overlay] Loaded ' + componentAllowlist.size + ' project components');
+      }
+    } catch (err) {
+      console.warn('[Overlay] Failed to load component allowlist:', err);
+    }
+  }
+
+  function isProjectComponent(name, source) {
+    if (!filterEnabled) return true;
+    if (!allowlistLoaded) return true;
+    if (componentAllowlist.has(name)) return true;
+    if (source?.fileName && source.fileName.includes('node_modules')) return false;
+    return false;
+  }
+
+  function filterFiberTree(nodes) {
+    const result = [];
+    for (const node of nodes) {
+      const isProject = isProjectComponent(node.name, node.source);
+      const filteredChildren = filterFiberTree(node.children);
+      
+      if (isProject) {
+        result.push({
+          ...node,
+          children: filteredChildren
+        });
+      } else {
+        result.push(...filteredChildren);
+      }
+    }
+    return result;
+  }
+
+  function buildFiberLookupByName(fiberNodes, lookup = new Map()) {
+    for (const node of fiberNodes) {
+      if (node.name) {
+        if (!lookup.has(node.name)) lookup.set(node.name, []);
+        lookup.get(node.name).push(node);
+      }
+      if (node.children) buildFiberLookupByName(node.children, lookup);
+    }
+    return lookup;
+  }
+
+  function collectStaticNames(nodes, names = new Set()) {
+    for (const node of nodes) {
+      if (node.component?.name) names.add(node.component.name);
+      if (node.children) collectStaticNames(node.children, names);
+    }
+    return names;
+  }
+
+  function mergeStaticWithFiber(staticNodes, fiberLookup, usedFibers = new Set(), staticNamesInTree = null) {
+    if (!staticNamesInTree) {
+      staticNamesInTree = collectStaticNames(staticNodes);
+    }
+    
+    return staticNodes.map(staticNode => {
+      const compName = staticNode.component?.name;
+      const isClientComponent = staticNode.component?.isClientComponent;
+      
+      if (staticNode.file === '{children}') {
+        return {
+          ...staticNode,
+          children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers, staticNamesInTree),
+          isSlot: true,
+        };
+      }
+      
+      let fiberMatch = null;
+      if (compName && fiberLookup.has(compName)) {
+        const candidates = fiberLookup.get(compName);
+        for (const candidate of candidates) {
+          if (!usedFibers.has(candidate)) {
+            fiberMatch = candidate;
+            usedFibers.add(candidate);
+            break;
+          }
+        }
+      }
+      
+      if (fiberMatch && isClientComponent) {
+        return {
+          file: staticNode.file,
+          component: staticNode.component,
+          source: fiberMatch.source || { fileName: staticNode.component?.filePath },
+          fiber: fiberMatch.fiber,
+          children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers, staticNamesInTree),
+          isBridge: true,
+          hasFiber: true,
+        };
+      }
+      
+      return {
+        file: staticNode.file,
+        component: staticNode.component,
+        source: staticNode.component?.filePath ? { fileName: staticNode.component.filePath } : null,
+        fiber: fiberMatch?.fiber || null,
+        children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers, staticNamesInTree),
+        isServerOnly: !fiberMatch && !isClientComponent,
+        hasFiber: !!fiberMatch,
+      };
+    });
+  }
+
+  function refreshFiberTree() {
+    FIBER_TREE = captureFullFiberTree();
+    const filtered = filterEnabled ? filterFiberTree(FIBER_TREE) : FIBER_TREE;
+    const fiberLookup = buildFiberLookupByName(filtered);
+    
+    TREE = mergeStaticWithFiber(JSON.parse(JSON.stringify(STATIC_TREE)), fiberLookup);
+    
+    const serverCount = countServerOnlyNodes(TREE);
+    const clientCount = countNodes(TREE) - serverCount;
+    STATS = { 
+      totalComponents: countNodes(TREE),
+      serverComponents: serverCount,
+      clientComponents: clientCount,
+      fiberNodes: fiberLookup.size,
+    };
+    renderPanel();
+    saveCalculatedTree();
+  }
+  
+  let lastSavedTreeHash = '';
+  function saveCalculatedTree() {
+    const cleanTree = stripFiberRefs(TREE);
+    const json = JSON.stringify(cleanTree, null, 2);
+    const hash = json.length + '-' + json.slice(0, 100);
+    if (hash === lastSavedTreeHash) return;
+    lastSavedTreeHash = hash;
+    
+    fetch('/__save_calculated_tree', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: json,
+    }).catch(() => {});
+  }
+  
+  function countServerOnlyNodes(nodes) {
+    return nodes.reduce((acc, n) => {
+      const isSelf = n.isServerOnly ? 1 : 0;
+      return acc + isSelf + countServerOnlyNodes(n.children || []);
+    }, 0);
+  }
+
+  function countNodes(nodes) {
+    return nodes.reduce((acc, n) => acc + 1 + countNodes(n.children), 0);
   }
 
   function isOverlayFiber(fiber) {
@@ -350,6 +659,60 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return { props: liveProps, state: stateValues, networkCalls: componentNetworkMap.get(componentName) || [] };
   }
 
+  function getLiveHooks(el, componentName) {
+    const fiber = getReactFiber(el);
+    if (!fiber) return [];
+
+    let targetFiber = fiber;
+    let current = fiber;
+    const seen = new Set();
+    while (current) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      if (getFiberName(current) === componentName) {
+        targetFiber = current;
+        break;
+      }
+      current = current.return;
+    }
+
+    const hooks = [];
+    let hookNode = targetFiber.memoizedState;
+    let idx = 0;
+    while (hookNode && idx < 20) {
+      let hookType = 'unknown';
+      let value = null;
+      
+      if (hookNode.queue !== undefined && hookNode.baseState !== undefined) {
+        hookType = 'useState';
+        value = hookNode.memoizedState;
+      } else if (hookNode.tag !== undefined && (hookNode.destroy !== undefined || hookNode.create !== undefined)) {
+        const tag = hookNode.tag;
+        if (tag & 4) hookType = 'useLayoutEffect';
+        else if (tag & 2) hookType = 'useEffect';
+        else hookType = 'useEffect';
+        value = null;
+      } else if (hookNode.memoizedState && typeof hookNode.memoizedState === 'object' && 'current' in hookNode.memoizedState) {
+        hookType = 'useRef';
+        value = hookNode.memoizedState.current;
+      } else if (Array.isArray(hookNode.deps)) {
+        hookType = 'useMemo/useCallback';
+        value = hookNode.memoizedState;
+      } else if (hookNode.memoizedState !== undefined) {
+        hookType = 'useState';
+        value = hookNode.memoizedState;
+      }
+      
+      if (hookType !== 'unknown') {
+        hooks.push({ index: idx, type: hookType, value });
+      }
+      
+      hookNode = hookNode.next;
+      idx++;
+    }
+    return hooks;
+  }
+
   function formatValue(val, maxLen = 50) {
     if (val === null) return 'null';
     if (val === undefined) return 'undefined';
@@ -440,6 +803,12 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
   function findBestMatchingElement(node, nodeId) {
     if (!node.component) return null;
+    
+    if (node.fiber) {
+      const domEl = getDomFromFiber(node.fiber);
+      if (domEl) return domEl;
+    }
+    
     const name = node.component.name;
     const allMatches = findElementsByComponentName(name);
     if (allMatches.length === 0) return null;
@@ -463,6 +832,12 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
   function findAllMatchingElements(node, nodeId) {
     if (!node.component) return [];
+    
+    if (node.fiber) {
+      const domEl = getDomFromFiber(node.fiber);
+      if (domEl) return [domEl];
+    }
+    
     const name = node.component.name;
     const allMatches = findElementsByComponentName(name);
     if (allMatches.length <= 1) return allMatches;
@@ -499,34 +874,82 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   let currentDetailNode = null;
   let currentDetailDomEl = null;
   let currentTab = 'props';
+  let currentDataFlowGraph = null;
 
   function renderTree(nodes, depth = 0, prefix = '') {
     return nodes.map((node, i) => {
       const nodeId = prefix ? prefix + '-' + i : String(i);
-      const hasChildren = node.children.length > 0;
+      const hasChildren = (node.children || []).length > 0;
       const comp = node.component;
-      const fileName = node.file.split('/').pop() || node.file;
+      const rawFile = node.source?.fileName || node.file || 'unknown';
+      
+      if (node.isSlot || rawFile === '{children}') {
+        const childrenHtml = hasChildren ? renderTree(node.children, depth, prefix + '-' + i) : '';
+        return '<div class="children-slot" data-id="' + nodeId + '">' + childrenHtml + '</div>';
+      }
+      
+      const fileName = rawFile.split('/').pop() || rawFile;
+      const lineNum = node.source?.lineNumber;
+      const fileDisplay = lineNum ? fileName + ':' + lineNum : fileName;
       const name = comp?.name || '—';
-      const isClient = comp?.isClientComponent;
-      const hooks = comp?.hooks?.length ? comp.hooks.slice(0, 2).join(', ') + (comp.hooks.length > 2 ? '...' : '') : '';
       const renderCount = renderCounts.get(name) || 0;
       const matches = nodeMatchesSearch(node, searchTerm);
       const childrenHtml = hasChildren ? '<div class="children">' + renderTree(node.children, depth + 1, nodeId) + '</div>' : '';
-
-      const nextjsType = comp?.nextjsFileType;
-      const nextjsBadge = nextjsType ? '<span class="badge nextjs">' + nextjsType.toUpperCase() + '</span>' : '';
+      const hasSource = rawFile !== 'unknown';
+      
+      const staticComp = name !== '—' ? staticComponentMap.get(name) : null;
+      const isServerOnly = node.isServerOnly;
+      const isBridge = node.isBridge;
+      const badges = [];
+      
+      if (staticComp?.nextjsFileType) {
+        const fileTypeIcons = { page: '📄', layout: '📐', loading: '⏳', error: '⚠️', template: '📋', 'not-found': '🔍' };
+        const icon = fileTypeIcons[staticComp.nextjsFileType] || '';
+        if (icon) badges.push('<span class="badge nextjs" title="' + staticComp.nextjsFileType + '">' + icon + '</span>');
+      }
+      
+      if (isBridge) {
+        badges.push('<span class="badge client bridge" title="Client boundary - first client component">CLIENT</span>');
+      } else if (staticComp?.isClientComponent) {
+        badges.push('<span class="badge client" title="Client Component (hydrated)">CLIENT</span>');
+      } else if (isServerOnly) {
+        badges.push('<span class="badge server rsc" title="Server-only (no fiber, rendered on server)">SERVER</span>');
+      } else if (!staticComp?.isClientComponent && staticComp) {
+        badges.push('<span class="badge server" title="Server Component">SERVER</span>');
+      }
+      
+      const hooksCount = staticComp?.hooks?.length || 0;
+      const hooksHtml = hooksCount > 0 ? '<span class="hooks" title="' + staticComp.hooks.join(', ') + '">⚡' + hooksCount + '</span>' : '';
+      
+      const dataFlow = staticComp?.childDataFlow || [];
+      const serverDataPassed = dataFlow.flatMap(f => 
+        Object.entries(f.props)
+          .filter(([, v]) => v.source === 'serverQuery')
+          .map(([k, v]) => f.component + '.' + k + ' <- ' + v.query + '()')
+      );
+      const dataFlowHtml = serverDataPassed.length > 0 
+        ? '<span class="data-flow" title="' + serverDataPassed.join('\\n') + '">📥' + serverDataPassed.length + '</span>' 
+        : '';
+      
+      const badgesHtml = badges.join('');
+      
+      const renderCountHtml = isServerOnly 
+        ? '<span class="render-count server-only" title="Server-rendered">—</span>'
+        : '<span class="render-count" style="' + (renderCount === 0 ? 'opacity:0.3' : '') + '">' + renderCount + '</span>';
+      
+      const nodeClasses = ['node', matches ? '' : 'hidden', isServerOnly ? 'server-only' : '', isBridge ? 'bridge' : ''].filter(Boolean).join(' ');
 
       return \`
-        <div class="node \${matches ? '' : 'hidden'}" data-depth="\${depth}" data-name="\${name}" data-file="\${node.file}" data-id="\${nodeId}">
+        <div class="\${nodeClasses}" data-depth="\${depth}" data-name="\${name}" data-file="\${rawFile}" data-id="\${nodeId}">
           <div class="node-header">
             <span class="toggle">\${hasChildren ? '▼' : '•'}</span>
             <span class="name">\${name}</span>
-            <span class="info-btn" title="View details">…</span>
-            <span class="render-count" style="\${renderCount === 0 ? 'opacity:0.3' : ''}">\${renderCount}</span>
-            <span class="file">\${fileName}</span>
-            <span class="badge \${isClient ? 'client' : 'server'}">\${isClient ? 'C' : 'S'}</span>
-            \${nextjsBadge}
-            \${hooks ? '<span class="hooks">' + hooks + '</span>' : ''}
+            \${badgesHtml}
+            \${hooksHtml}
+            \${dataFlowHtml}
+            <span class="info-btn" title="View details">ℹ</span>
+            \${renderCountHtml}
+            <span class="file \${hasSource ? 'has-source' : ''}" title="\${rawFile}">\${fileDisplay}</span>
           </div>
           \${childrenHtml}
         </div>
@@ -541,18 +964,24 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         ? '<div class="loading"><div class="loading-text">No components found</div></div>'
         : renderTree(TREE);
 
+    const filterLabel = filterEnabled ? 'FILTERED' : 'ALL';
+
     container.innerHTML = \`
       <div class="panel \${isOpen ? 'open' : ''}">
         <div class="resize-handle"></div>
         <div class="header">
           <div class="header-row">
             <h2>🧩 Component Overlay</h2>
-            <button class="pause-btn \${isPaused ? 'paused' : ''}">\${isPaused ? '▶ Resume' : '⏸ Pause'}</button>
+            <div class="header-buttons">
+              <button class="refresh-btn" title="Refresh fiber tree">↻</button>
+              <button class="filter-btn \${filterEnabled ? 'on' : 'off'}" title="Toggle filter (show only project components)">\${filterLabel}</button>
+              <button class="pause-btn \${isPaused ? 'paused' : ''}">\${isPaused ? '▶' : '⏸'}</button>
+            </div>
           </div>
           <div class="stats">
             <div class="stat"><span class="stat-value">\${STATS.totalComponents}</span><span class="stat-label">total</span></div>
-            <div class="stat"><span class="stat-value">\${STATS.clientComponents}</span><span class="stat-label">client</span></div>
-            <div class="stat"><span class="stat-value">\${STATS.serverComponents}</span><span class="stat-label">server</span></div>
+            <div class="stat"><span class="stat-value" style="color:#7ee787">\${STATS.serverComponents || 0}</span><span class="stat-label">server</span></div>
+            <div class="stat"><span class="stat-value" style="color:#58a6ff">\${STATS.fiberNodes || 0}</span><span class="stat-label">client</span></div>
             <div class="stat"><span class="stat-value" id="total-renders" style="color:#f85149">\${totalRenders}</span><span class="stat-label">renders</span></div>
           </div>
           <div class="route">\${ROUTE}</div>
@@ -578,8 +1007,21 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     const resizeHandle = shadow.querySelector('.resize-handle');
     const searchInput = shadow.querySelector('.search input');
     const pauseBtn = shadow.querySelector('.pause-btn');
+    const refreshBtn = shadow.querySelector('.refresh-btn');
+    const filterBtn = shadow.querySelector('.filter-btn');
 
     toggleBtn.addEventListener('click', e => { e.stopPropagation(); e.stopImmediatePropagation(); toggle(); }, { capture: true });
+
+    refreshBtn?.addEventListener('click', e => {
+      e.stopPropagation(); e.stopImmediatePropagation();
+      refreshFiberTree();
+    }, { capture: true });
+
+    filterBtn?.addEventListener('click', e => {
+      e.stopPropagation(); e.stopImmediatePropagation();
+      filterEnabled = !filterEnabled;
+      refreshFiberTree();
+    }, { capture: true });
 
     let isResizing = false;
     resizeHandle.addEventListener('mousedown', e => {
@@ -611,7 +1053,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     pauseBtn.addEventListener('click', e => {
       e.stopPropagation(); e.stopImmediatePropagation();
       isPaused = !isPaused;
-      pauseBtn.textContent = isPaused ? '▶ Resume' : '⏸ Pause';
+      pauseBtn.textContent = isPaused ? '▶' : '⏸';
       pauseBtn.classList.toggle('paused', isPaused);
       if (isPaused) disableInspectMode();
       else if (isOpen) enableInspectMode();
@@ -779,7 +1221,14 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
       header.addEventListener('dblclick', e => {
         e.stopPropagation(); e.stopImmediatePropagation();
-        window.open('vscode://file/' + node.dataset.file);
+        const nodeId = node.dataset.id;
+        const treeNode = findNodeById(TREE, nodeId);
+        const filePath = treeNode?.source?.fileName || node.dataset.file;
+        const lineNumber = treeNode?.source?.lineNumber || 1;
+        if (filePath && filePath !== 'unknown') {
+          const uri = 'cursor://file/' + filePath + ':' + lineNumber;
+          window.open(uri);
+        }
       }, { capture: true });
     });
   }
@@ -802,6 +1251,24 @@ export function generateOverlayScript(data: RouteAnalysis): string {
           const newTab = e.target.dataset.tab;
           if (newTab && newTab !== currentTab) { currentTab = newTab; renderDetailContent(); }
         }
+        if (e.target.classList.contains('copy-llm-btn')) {
+          const node = currentDetailNode;
+          const domEl = currentDetailDomEl;
+          const comp = node?.component;
+          const compName = comp?.name;
+          const live = domEl && compName ? getLiveComponentData(domEl, compName) : { props: {}, state: [] };
+          const liveHooks = domEl && compName ? getLiveHooks(domEl, compName) : [];
+          const exportData = generateLLMExport(currentDataFlowGraph, node, live.props || {}, liveHooks);
+          navigator.clipboard.writeText(JSON.stringify(exportData, null, 2));
+          e.target.textContent = '✓ Copied!';
+          setTimeout(() => { e.target.textContent = '📋 Copy for LLM'; }, 1500);
+        }
+        if (e.target.classList.contains('copy-mermaid-btn')) {
+          const mermaid = generateMermaidDiagram(currentDataFlowGraph);
+          navigator.clipboard.writeText(mermaid.replace(/\\\\n/g, '\\n'));
+          e.target.textContent = '✓ Copied!';
+          setTimeout(() => { e.target.textContent = '📊 Copy Mermaid'; }, 1500);
+        }
       }, { capture: true });
     }
 
@@ -815,21 +1282,596 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     currentDetailDomEl = null;
   }
 
+  function buildDataFlowGraph(node, domEl, liveProps, liveHooks) {
+    const comp = node.component;
+    const compName = comp?.name || 'Unknown';
+    const staticComp = compName ? staticComponentMap.get(compName) : null;
+    
+    const nodes = [];
+    const edges = [];
+    const propOrigins = [];
+    let nodeId = 0;
+    
+    const compNodeId = 'comp_' + nodeId++;
+    nodes.push({
+      id: compNodeId,
+      label: compName,
+      type: 'component',
+      meta: { filePath: node.file, isClient: staticComp?.isClientComponent }
+    });
+    
+    const hookNodes = new Map();
+    const staticHooks = staticComp?.hooks || [];
+    for (let i = 0; i < staticHooks.length; i++) {
+      const hookName = staticHooks[i];
+      const hookNodeId = 'hook_' + nodeId++;
+      hookNodes.set(hookName, hookNodeId);
+      nodes.push({
+        id: hookNodeId,
+        label: hookName,
+        type: 'hook',
+        meta: { index: i, liveValue: liveHooks[i]?.value }
+      });
+      edges.push({ from: hookNodeId, to: compNodeId, label: 'provides' });
+    }
+    
+    const queryNodes = new Map();
+    const serverQueries = staticComp?.serverQueries || [];
+    for (const queryName of serverQueries) {
+      const queryNodeId = 'query_' + nodeId++;
+      queryNodes.set(queryName, queryNodeId);
+      nodes.push({
+        id: queryNodeId,
+        label: queryName + '()',
+        type: 'query',
+        meta: { isAsync: true }
+      });
+      edges.push({ from: queryNodeId, to: compNodeId, label: 'fetches' });
+    }
+    
+    function findAllParentsWithChildDataFlow(targetCompName) {
+      const parents = [];
+      
+      for (const [compName, compInfo] of staticComponentMap) {
+        const childDataFlow = compInfo?.childDataFlow || [];
+        for (const flow of childDataFlow) {
+          if (flow.component === targetCompName) {
+            parents.push({
+              parentName: compName,
+              parentInfo: compInfo,
+              propsPassedToChild: flow.props
+            });
+          }
+        }
+      }
+      
+      return parents;
+    }
+    
+    function findComponentInTree(tree, targetName, path = []) {
+      for (const n of tree) {
+        const nodeName = n.component?.name;
+        const newPath = [...path, n];
+        
+        if (nodeName === targetName) {
+          return { node: n, path: newPath };
+        }
+        
+        if (n.children?.length) {
+          const found = findComponentInTree(n.children, targetName, newPath);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+    
+    function tracePropsRecursively(propName, componentName, filePath, visited = new Set(), depth = 0) {
+      const key = componentName + '.' + propName;
+      if (visited.has(key) || depth > 10) return [];
+      visited.add(key);
+      
+      const chain = [];
+      
+      const parents = findAllParentsWithChildDataFlow(componentName);
+      
+      if (parents.length === 0) {
+        return chain;
+      }
+      
+      for (const parentInfo of parents) {
+        const propSource = parentInfo.propsPassedToChild[propName];
+        if (!propSource) continue;
+        
+        const parentStatic = parentInfo.parentInfo;
+        const parentFile = parentStatic?.filePath || 'unknown';
+        
+        if (propSource.source === 'serverQuery' && propSource.query) {
+          chain.push({
+            componentName: parentInfo.parentName,
+            filePath: parentFile,
+            queryName: propSource.query,
+            type: 'query',
+            expression: propSource.query + '()'
+          });
+        } else if (propSource.source === 'hook' && propSource.hookName) {
+          chain.push({
+            componentName: parentInfo.parentName,
+            filePath: parentFile,
+            hookName: propSource.hookName,
+            type: 'hook',
+            expression: propSource.hookName + '()'
+          });
+        } else if (propSource.source === 'prop' && propSource.propName) {
+          chain.push({
+            componentName: parentInfo.parentName,
+            filePath: parentFile,
+            propName: propSource.propName,
+            type: 'prop',
+            expression: 'props.' + propSource.propName
+          });
+          const deeperChain = tracePropsRecursively(propSource.propName, parentInfo.parentName, parentFile, visited, depth + 1);
+          chain.push(...deeperChain);
+        } else if (propSource.source === 'computed') {
+          chain.push({
+            componentName: parentInfo.parentName,
+            filePath: parentFile,
+            type: 'computed',
+            expression: 'computed'
+          });
+          
+          const parentHooks = parentStatic?.hooks || [];
+          for (const hookName of parentHooks) {
+            if (hookName.startsWith('use') && (
+              hookName.toLowerCase().includes('query') || 
+              hookName.toLowerCase().includes('mutation') ||
+              hookName.toLowerCase().includes('state') ||
+              hookName.toLowerCase().includes('context')
+            )) {
+              chain.push({
+                componentName: parentInfo.parentName,
+                filePath: parentFile,
+                hookName: hookName,
+                type: 'hook',
+                expression: hookName + '()',
+                inferred: true
+              });
+              break;
+            }
+          }
+        } else if (propSource.source === 'literal') {
+          chain.push({
+            componentName: parentInfo.parentName,
+            filePath: parentFile,
+            type: 'literal',
+            expression: 'literal'
+          });
+        } else {
+          chain.push({
+            componentName: parentInfo.parentName,
+            filePath: parentFile,
+            type: propSource.source || 'unknown',
+            expression: propSource.source || 'unknown'
+          });
+        }
+        
+        break;
+      }
+      
+      return chain;
+    }
+    
+    const staticProps = staticComp?.props || [];
+    const allPropNames = new Set([
+      ...staticProps.map(p => p.name),
+      ...Object.keys(liveProps || {}).filter(k => !k.startsWith('__') && k !== 'children')
+    ]);
+    
+    for (const propName of allPropNames) {
+      const staticProp = staticProps.find(p => p.name === propName);
+      const liveValue = liveProps?.[propName];
+      
+      const propNodeId = 'prop_' + nodeId++;
+      nodes.push({
+        id: propNodeId,
+        label: propName,
+        type: 'prop',
+        meta: { 
+          value: liveValue !== undefined ? formatValue(liveValue, 30) : (staticProp?.type || 'unknown'),
+          type: staticProp?.type,
+          optional: staticProp?.optional
+        }
+      });
+      edges.push({ from: propNodeId, to: compNodeId, label: 'prop' });
+      
+      const chain = tracePropsRecursively(propName, compName, node.file);
+      
+      let source = { source: 'unknown' };
+      if (chain.length > 0) {
+        const firstLink = chain[0];
+        if (firstLink.queryName) {
+          source = { source: 'serverQuery', query: firstLink.queryName };
+        } else if (firstLink.hookName) {
+          source = { source: 'hook', hookName: firstLink.hookName };
+        } else if (firstLink.propName) {
+          source = { source: 'prop', propName: firstLink.propName };
+        } else if (firstLink.type === 'computed') {
+          source = { source: 'computed' };
+        } else {
+          source = { source: 'literal' };
+        }
+      } else {
+        if (typeof liveValue === 'function') {
+          source = { source: 'computed' };
+        } else if (liveValue !== undefined) {
+          source = { source: 'literal' };
+        }
+      }
+      
+      for (const link of chain) {
+        if (link.queryName) {
+          let qNode = nodes.find(n => n.label === link.queryName + '()' && n.type === 'query');
+          if (!qNode) {
+            const qId = 'query_' + nodeId++;
+            qNode = { id: qId, label: link.queryName + '()', type: 'query', meta: { inComponent: link.componentName } };
+            nodes.push(qNode);
+          }
+          edges.push({ from: qNode.id, to: propNodeId, label: 'via ' + link.componentName });
+        }
+        
+        if (link.hookName) {
+          let hNode = nodes.find(n => n.label === link.hookName && n.type === 'hook');
+          if (!hNode) {
+            const hId = 'hook_' + nodeId++;
+            hNode = { id: hId, label: link.hookName, type: 'hook', meta: { inComponent: link.componentName, inferred: link.inferred } };
+            nodes.push(hNode);
+          }
+          edges.push({ from: hNode.id, to: propNodeId, label: 'via ' + link.componentName });
+        }
+        
+        if (link.type === 'prop' && link.propName) {
+          let pNode = nodes.find(n => n.label === link.componentName + '.' + link.propName && n.type === 'prop');
+          if (!pNode) {
+            const pId = 'pprop_' + nodeId++;
+            pNode = { id: pId, label: link.componentName + '.' + link.propName, type: 'prop', meta: { fromComponent: link.componentName } };
+            nodes.push(pNode);
+          }
+          edges.push({ from: pNode.id, to: propNodeId, label: 'passed as' });
+        }
+      }
+      
+      propOrigins.push({
+        propName,
+        value: liveValue,
+        type: staticProp?.type,
+        optional: staticProp?.optional,
+        source,
+        chain: [
+          { componentName: compName, filePath: node.file, propName, type: 'component' },
+          ...chain
+        ]
+      });
+    }
+    
+    return {
+      componentName: compName,
+      filePath: node.file,
+      nodes,
+      edges,
+      propOrigins
+    };
+  }
+  
+  function renderDataFlowGraph(graph) {
+    if (!graph || !graph.propOrigins.length) return '<div class="detail-empty">No props detected for this component</div>';
+    
+    const typeColors = {
+      component: '#58a6ff',
+      prop: '#ffa657',
+      hook: '#d2a8ff',
+      query: '#7ee787',
+      context: '#f778ba',
+      literal: '#8b949e',
+      computed: '#f0883e',
+      serverQuery: '#7ee787',
+      unknown: '#484f58'
+    };
+    
+    const typeIcons = {
+      component: '📦',
+      prop: '📌',
+      hook: '⚡',
+      query: '🔍',
+      context: '🌐',
+      literal: '📝',
+      computed: '⚙️',
+      serverQuery: '🔍',
+      unknown: '❓'
+    };
+    
+    let html = '<div class="dataflow-graph">';
+    
+    html += '<div class="dataflow-legend">';
+    const legendTypes = ['component', 'prop', 'hook', 'query', 'computed', 'literal'];
+    for (const type of legendTypes) {
+      html += '<span class="legend-item"><span class="legend-dot" style="background:' + typeColors[type] + '"></span>' + typeIcons[type] + ' ' + type + '</span>';
+    }
+    html += '</div>';
+    
+    html += '<div class="dataflow-origins">';
+    html += '<h4>Prop Origins (' + graph.propOrigins.length + ' props)</h4>';
+    
+    for (const origin of graph.propOrigins) {
+      const sourceType = origin.source.source === 'serverQuery' ? 'query' : origin.source.source;
+      const sourceColor = typeColors[sourceType] || typeColors.unknown;
+      const sourceIcon = typeIcons[sourceType] || typeIcons.unknown;
+      const hasChain = origin.chain.length > 1;
+      
+      html += '<div class="origin-block' + (hasChain ? ' has-chain' : '') + '">';
+      
+      html += '<div class="origin-row">';
+      html += '<div class="origin-prop">';
+      html += '<span class="origin-icon">' + typeIcons.prop + '</span>';
+      html += '<span class="origin-name">' + origin.propName + '</span>';
+      if (origin.type) {
+        html += '<span class="origin-type">' + origin.type + '</span>';
+      }
+      if (origin.optional) {
+        html += '<span class="origin-optional">?</span>';
+      }
+      html += '</div>';
+      html += '<div class="origin-arrow">←</div>';
+      html += '<div class="origin-source" style="border-color:' + sourceColor + '">';
+      html += '<span class="origin-icon">' + sourceIcon + '</span>';
+      
+      if (origin.source.source === 'serverQuery') {
+        html += '<span class="origin-label query">' + (origin.source.query || 'query') + '()</span>';
+      } else if (origin.source.source === 'hook') {
+        html += '<span class="origin-label hook">' + (origin.source.hookName || 'hook') + '</span>';
+      } else if (origin.source.source === 'prop') {
+        html += '<span class="origin-label prop">↑ ' + (origin.source.propName || 'parent') + '</span>';
+      } else if (origin.source.source === 'context') {
+        html += '<span class="origin-label context">' + (origin.source.contextName || 'context') + '</span>';
+      } else if (origin.source.source === 'computed') {
+        html += '<span class="origin-label computed">computed</span>';
+      } else if (origin.source.source === 'literal') {
+        html += '<span class="origin-label literal">literal</span>';
+      } else {
+        html += '<span class="origin-label unknown">' + origin.source.source + '</span>';
+      }
+      
+      html += '</div>';
+      html += '</div>';
+      
+      if (hasChain) {
+        html += '<div class="origin-chain">';
+        html += '<div class="chain-title">Data flow trace:</div>';
+        html += '<div class="chain-flow">';
+        
+        for (let i = origin.chain.length - 1; i >= 0; i--) {
+          const link = origin.chain[i];
+          const linkType = link.type === 'serverQuery' ? 'query' : link.type;
+          const linkColor = typeColors[linkType] || typeColors.component;
+          const linkIcon = typeIcons[linkType] || typeIcons.component;
+          
+          html += '<div class="chain-step">';
+          html += '<span class="chain-link" style="border-color:' + linkColor + '">';
+          html += '<span class="chain-icon">' + linkIcon + '</span>';
+          html += '<span class="chain-comp">' + link.componentName + '</span>';
+          
+          if (link.queryName) {
+            html += '<span class="chain-detail query">.' + link.queryName + '()</span>';
+          } else if (link.hookName) {
+            html += '<span class="chain-detail hook">.' + link.hookName + '()</span>';
+          } else if (link.propName) {
+            html += '<span class="chain-detail prop">.' + link.propName + '</span>';
+          } else if (link.expression) {
+            html += '<span class="chain-detail">' + link.expression + '</span>';
+          }
+          
+          html += '</span>';
+          if (i > 0) html += '<span class="chain-arrow">→</span>';
+          html += '</div>';
+        }
+        
+        html += '</div></div>';
+      }
+      
+      html += '</div>';
+    }
+    
+    html += '</div>';
+    
+    html += '<div class="dataflow-summary">';
+    const hookCount = graph.nodes.filter(n => n.type === 'hook').length;
+    const queryCount = graph.nodes.filter(n => n.type === 'query').length;
+    const propCount = graph.propOrigins.length;
+    const tracedCount = graph.propOrigins.filter(p => p.chain.length > 1).length;
+    
+    html += '<div class="summary-stat"><span class="stat-icon">' + typeIcons.prop + '</span><span class="stat-num">' + propCount + '</span> props</div>';
+    html += '<div class="summary-stat"><span class="stat-icon">🔗</span><span class="stat-num">' + tracedCount + '</span> traced</div>';
+    html += '<div class="summary-stat"><span class="stat-icon">' + typeIcons.hook + '</span><span class="stat-num">' + hookCount + '</span> hooks</div>';
+    html += '<div class="summary-stat"><span class="stat-icon">' + typeIcons.query + '</span><span class="stat-num">' + queryCount + '</span> queries</div>';
+    html += '</div>';
+    
+    html += '<div class="dataflow-actions">';
+    html += '<button class="copy-llm-btn" title="Copy graph as JSON for LLM analysis">📋 Copy for LLM</button>';
+    html += '<button class="copy-mermaid-btn" title="Copy as Mermaid diagram">📊 Copy Mermaid</button>';
+    html += '</div>';
+    
+    html += '</div>';
+    return html;
+  }
+  
+  function generateMermaidDiagram(graph) {
+    if (!graph) return '';
+    
+    let mermaid = 'flowchart TD\\n';
+    
+    const typeStyles = {
+      component: 'fill:#1f6feb,stroke:#58a6ff,color:#fff',
+      prop: 'fill:#9e6a03,stroke:#ffa657,color:#fff',
+      hook: 'fill:#8957e5,stroke:#d2a8ff,color:#fff',
+      query: 'fill:#238636,stroke:#7ee787,color:#fff',
+      context: 'fill:#bf3989,stroke:#f778ba,color:#fff',
+      literal: 'fill:#6e7681,stroke:#8b949e,color:#fff'
+    };
+    
+    for (const node of graph.nodes) {
+      const shape = node.type === 'component' ? '([' + node.label + '])' :
+                    node.type === 'query' ? '{{' + node.label + '}}' :
+                    node.type === 'hook' ? '((' + node.label + '))' :
+                    '[' + node.label + ']';
+      mermaid += '    ' + node.id + shape + '\\n';
+    }
+    
+    for (const edge of graph.edges) {
+      const label = edge.label ? '|' + edge.label + '|' : '';
+      mermaid += '    ' + edge.from + ' -->' + label + ' ' + edge.to + '\\n';
+    }
+    
+    return mermaid;
+  }
+  
+  function generateLLMExport(graph, node, liveProps, liveHooks) {
+    const comp = node.component;
+    const staticComp = comp?.name ? staticComponentMap.get(comp.name) : null;
+    
+    return {
+      component: {
+        name: comp?.name || 'Unknown',
+        file: node.file,
+        isClient: staticComp?.isClientComponent || false,
+        isServer: staticComp?.isServerComponent || false,
+        nextjsFileType: staticComp?.nextjsFileType || null
+      },
+      dataFlow: {
+        propOrigins: graph.propOrigins.map(o => ({
+          prop: o.propName,
+          currentValue: formatValue(o.value, 100),
+          sourceType: o.source.source,
+          sourceDetail: o.source.query || o.source.hookName || o.source.propName || o.source.contextName || null,
+          traceChain: o.chain.map(c => ({
+            component: c.componentName,
+            file: c.filePath,
+            via: c.queryName || c.hookName || c.propName || null,
+            type: c.type
+          }))
+        })),
+        hooks: (staticComp?.hooks || []).map((h, i) => ({
+          name: h,
+          liveValue: liveHooks[i]?.value !== undefined ? formatValue(liveHooks[i].value, 50) : null
+        })),
+        serverQueries: staticComp?.serverQueries || [],
+        childDataFlow: staticComp?.childDataFlow || []
+      },
+      graph: {
+        nodes: graph.nodes.map(n => ({ id: n.id, label: n.label, type: n.type })),
+        edges: graph.edges.map(e => ({ from: e.from, to: e.to, label: e.label }))
+      },
+      analysisHints: {
+        potentialIssues: detectPotentialIssues(graph, staticComp),
+        refactoringOpportunities: detectRefactoringOpportunities(graph, staticComp)
+      }
+    };
+  }
+  
+  function detectPotentialIssues(graph, staticComp) {
+    const issues = [];
+    
+    const propDrillingDepth = Math.max(...graph.propOrigins.map(o => o.chain.length), 0);
+    if (propDrillingDepth > 3) {
+      issues.push('Prop drilling detected: ' + propDrillingDepth + ' levels deep. Consider using Context or state management.');
+    }
+    
+    const hookCount = (staticComp?.hooks || []).length;
+    if (hookCount > 5) {
+      issues.push('High hook count (' + hookCount + '). Consider extracting to custom hook or splitting component.');
+    }
+    
+    const queryProps = graph.propOrigins.filter(o => o.source.source === 'serverQuery');
+    if (queryProps.length > 3) {
+      issues.push('Many server query props (' + queryProps.length + '). Consider data aggregation or caching.');
+    }
+    
+    return issues;
+  }
+  
+  function detectRefactoringOpportunities(graph, staticComp) {
+    const opportunities = [];
+    
+    const computedProps = graph.propOrigins.filter(o => o.source.source === 'computed');
+    if (computedProps.length > 2) {
+      opportunities.push('Multiple computed props could be consolidated into useMemo.');
+    }
+    
+    const hooks = staticComp?.hooks || [];
+    const stateHooks = hooks.filter(h => h === 'useState');
+    if (stateHooks.length > 3) {
+      opportunities.push('Multiple useState calls could be consolidated with useReducer.');
+    }
+    
+    const propChains = graph.propOrigins.filter(o => o.chain.length > 2);
+    if (propChains.length > 0) {
+      const components = [...new Set(propChains.flatMap(p => p.chain.map(c => c.componentName)))];
+      opportunities.push('Props flow through: ' + components.join(' → ') + '. Consider Context or composition.');
+    }
+    
+    return opportunities;
+  }
+
   function renderDetailContent() {
     if (!detailOverlay || !currentDetailNode) return;
 
     const node = currentDetailNode;
     const domEl = currentDetailDomEl;
     const comp = node.component;
-    const live = domEl && comp?.name ? getLiveComponentData(domEl, comp.name) : { props: {}, state: [], networkCalls: [] };
-    const networkCalls = live.networkCalls.length > 0 ? live.networkCalls : (componentNetworkMap.get(comp?.name) || []);
+    const compName = comp?.name;
+    const staticComp = compName ? staticComponentMap.get(compName) : null;
+    const live = domEl && compName ? getLiveComponentData(domEl, compName) : { props: {}, state: [] };
+    const liveHooks = domEl && compName ? getLiveHooks(domEl, compName) : [];
+    
+    const staticProps = staticComp?.props || [];
+    const staticHookNames = staticComp?.hooks || [];
+    
+    const liveProps = Object.entries(live.props || {}).filter(([k]) => !k.startsWith('__') && k !== 'children');
+    
+    const mergedProps = [];
+    const seenKeys = new Set();
+    
+    for (const [key, value] of liveProps) {
+      seenKeys.add(key);
+      const staticProp = staticProps.find(p => p.name === key);
+      mergedProps.push({
+        name: key,
+        value,
+        type: staticProp?.type || null,
+        optional: staticProp?.optional ?? true,
+      });
+    }
+    
+    for (const sp of staticProps) {
+      if (!seenKeys.has(sp.name)) {
+        mergedProps.push({
+          name: sp.name,
+          value: undefined,
+          type: sp.type,
+          optional: sp.optional,
+        });
+      }
+    }
+    
+    const mergedHooks = liveHooks.map((h, i) => ({
+      ...h,
+      staticName: staticHookNames[i] || null,
+    }));
+
+    currentDataFlowGraph = buildDataFlowGraph(node, domEl, live.props || {}, liveHooks);
 
     const tabs = [
-      { id: 'props', label: 'Props', count: comp?.props?.length || 0 },
-      { id: 'live', label: 'Live Values', count: Object.keys(live.props || {}).filter(k => !k.startsWith('__') && k !== 'children').length },
+      { id: 'props', label: 'Props', count: mergedProps.length },
       { id: 'state', label: 'State', count: live.state?.length || 0 },
-      { id: 'hooks', label: 'Hooks', count: comp?.hooks?.length || 0 },
-      { id: 'network', label: 'Network', count: networkCalls.length },
+      { id: 'hooks', label: 'Hooks', count: mergedHooks.length || staticHookNames.length },
+      { id: 'dataflow', label: 'Data Flow', count: currentDataFlowGraph.propOrigins.length },
     ];
 
     const tabsHtml = tabs.map(t => '<button class="detail-tab ' + (currentTab === t.id ? 'active' : '') + '" data-tab="' + t.id + '">' + t.label + (t.count ? ' (' + t.count + ')' : '') + '</button>').join('');
@@ -837,40 +1879,50 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     let contentHtml = '';
 
     if (currentTab === 'props') {
-      if (comp?.props?.length) {
-        contentHtml = comp.props.map(p => '<div class="detail-row"><div class="detail-key">' + (p.optional ? '<span class="detail-optional">?</span>' : '') + p.name + '</div><div class="detail-type">' + p.type + '</div></div>').join('');
-      } else contentHtml = '<div class="detail-empty">No props defined</div>';
-    } else if (currentTab === 'live') {
-      const liveProps = Object.entries(live.props || {}).filter(([k]) => !k.startsWith('__') && k !== 'children');
-      if (liveProps.length) {
-        contentHtml = liveProps.map(([k, v]) => '<div class="detail-row"><div class="detail-key">' + k + '</div><div class="detail-value">' + formatValue(v, 100) + '</div></div>').join('');
-      } else contentHtml = '<div class="detail-empty">No live props available</div>';
+      if (mergedProps.length) {
+        contentHtml = mergedProps.map(p => {
+          const typeHtml = p.type ? '<span class="detail-type">' + p.type + '</span>' : '';
+          const optMark = p.optional ? '?' : '';
+          const valueHtml = p.value !== undefined ? formatValue(p.value, 100) : '<span class="detail-undefined">undefined</span>';
+          return '<div class="detail-row"><div class="detail-key">' + p.name + optMark + ' ' + typeHtml + '</div><div class="detail-value">' + valueHtml + '</div></div>';
+        }).join('');
+      } else contentHtml = '<div class="detail-empty">No props</div>';
     } else if (currentTab === 'state') {
       if (live.state?.length) {
         contentHtml = live.state.map(s => '<div class="detail-row"><div class="detail-key">useState[' + s.index + ']</div><div class="detail-value">' + formatValue(s.value, 100) + '</div></div>').join('');
-      } else contentHtml = '<div class="detail-empty">No state hooks found</div>';
+      } else contentHtml = '<div class="detail-empty">No state</div>';
     } else if (currentTab === 'hooks') {
-      if (comp?.hooks?.length) {
-        contentHtml = '<div class="hooks-list">' + comp.hooks.map(h => '<span class="hook-tag">' + h + '</span>').join('') + '</div>';
-      } else contentHtml = '<div class="detail-empty">No hooks used</div>';
-    } else if (currentTab === 'network') {
-      if (networkCalls.length) {
-        contentHtml = networkCalls.map(n => '<div class="net-row"><div class="net-method">' + n.method + '</div><div class="net-url" title="' + n.url + '">' + n.url + '</div><div class="net-status ' + (n.status >= 400 || n.status === 'error' ? 'err' : 'ok') + '">' + n.status + '</div><div class="net-time">' + n.duration + 'ms</div></div>').join('');
-      } else contentHtml = '<div class="detail-empty">No network requests tracked</div>';
+      if (mergedHooks.length) {
+        contentHtml = mergedHooks.map(h => {
+          const hookName = h.staticName || h.type;
+          return '<div class="detail-row"><div class="detail-key">' + hookName + '[' + h.index + ']</div><div class="detail-value">' + (h.value !== null ? formatValue(h.value, 80) : '—') + '</div></div>';
+        }).join('');
+      } else if (staticHookNames.length) {
+        contentHtml = staticHookNames.map((name, i) => '<div class="detail-row"><div class="detail-key">' + name + '[' + i + ']</div><div class="detail-value">—</div></div>').join('');
+      } else contentHtml = '<div class="detail-empty">No hooks detected</div>';
+    } else if (currentTab === 'dataflow') {
+      contentHtml = renderDataFlowGraph(currentDataFlowGraph);
     }
 
-    const nextjsTypeBadge = comp?.nextjsFileType ? '<span class="badge nextjs">' + comp.nextjsFileType.toUpperCase() + '</span>' : '';
+    const headerBadges = [];
+    if (staticComp?.nextjsFileType) {
+      const fileTypeLabels = { page: '📄 Page', layout: '📐 Layout', loading: '⏳ Loading', error: '⚠️ Error', template: '📋 Template', 'not-found': '🔍 Not Found' };
+      headerBadges.push('<span class="badge nextjs">' + (fileTypeLabels[staticComp.nextjsFileType] || staticComp.nextjsFileType) + '</span>');
+    }
+    if (staticComp?.isClientComponent) {
+      headerBadges.push('<span class="badge client">Client Component</span>');
+    } else if (staticComp?.isServerComponent) {
+      headerBadges.push('<span class="badge server">Server Component</span>');
+    }
+    const headerBadgesHtml = headerBadges.length ? '<div class="badges">' + headerBadges.join('') + '</div>' : '';
 
     detailOverlay.innerHTML = \`
       <div class="detail-dialog">
         <div class="detail-header">
           <div>
-            <h3>\${comp?.name || 'Unknown'}</h3>
+            <h3>\${compName || 'Unknown'}</h3>
             <div class="file">\${node.file}</div>
-            <div class="badges">
-              <span class="badge \${comp?.isClientComponent ? 'client' : 'server'}">\${comp?.isClientComponent ? 'Client' : 'Server'}</span>
-              \${nextjsTypeBadge}
-            </div>
+            \${headerBadgesHtml}
           </div>
           <button class="detail-close">×</button>
         </div>
@@ -927,6 +1979,12 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   function selectTreeNodeByStack(stack) {
     const result = findNodeByAncestry(TREE, stack, '', []);
     if (result && selectTreeNodeById(result.nodeId)) return result.nodeId;
+
+    for (let i = 1; i < stack.length; i++) {
+      const shiftedStack = stack.slice(i);
+      const fallback = findNodeByAncestry(TREE, shiftedStack, '', []);
+      if (fallback && selectTreeNodeById(fallback.nodeId)) return fallback.nodeId;
+    }
 
     for (const name of stack) {
       const fallback = findFirstNodeWithName(TREE, name);
@@ -1009,36 +2067,6 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return true;
   }
 
-  async function reloadData() {
-    const newPath = window.location.pathname;
-    if (isLoading) return;
-
-    isLoading = true;
-    currentPath = newPath;
-
-    const tree = shadow.querySelector('.tree');
-    if (tree) tree.innerHTML = '<div class="loading"><div class="loading-spinner"></div><div class="loading-text">Analyzing route...</div></div>';
-
-    try {
-      const res = await fetch('/__overlay_data.json?route=' + encodeURIComponent(newPath));
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-
-      TREE = data.componentTree;
-      STATS = data.stats;
-      ROUTE = data.route;
-      isLoading = false;
-      renderPanel();
-    } catch (err) {
-      isLoading = false;
-      if (tree) tree.innerHTML = '<div class="loading"><div class="loading-text" style="color:#f85149;">Error: ' + err.message + '</div></div>';
-    }
-  }
-
-  function checkRouteChange() {
-    if (window.location.pathname !== currentPath && !isLoading) reloadData();
-  }
-
   function toggle() {
     isOpen = !isOpen;
     const panel = shadow.querySelector('.panel');
@@ -1071,22 +2099,278 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     }
   });
 
-  window.addEventListener('popstate', checkRouteChange);
-  setInterval(checkRouteChange, 500);
-
   document.body.appendChild(host);
   renderPanel();
   toggle();
+  
+  loadComponentAllowlist().then(() => {
+    function waitForFiberTree(attempts = 0) {
+      refreshFiberTree();
+      if (FIBER_TREE.length === 0 && attempts < 20) {
+        setTimeout(() => waitForFiberTree(attempts + 1), 250);
+      } else {
+        isLoading = false;
+        renderPanel();
+      }
+    }
+    setTimeout(() => waitForFiberTree(), 100);
+  });
+
+  function getStaticComponentMap() {
+    const obj = {};
+    for (const [name, comp] of staticComponentMap) {
+      obj[name] = comp;
+    }
+    return obj;
+  }
+  
+  function stripFiberRefs(nodes) {
+    return nodes.map(n => ({
+      file: n.file,
+      component: n.component,
+      source: n.source,
+      hasFiber: !!n.fiber,
+      children: stripFiberRefs(n.children || [])
+    }));
+  }
+  
+  function compareTreeNodes(staticNode, fiberNode, path = '') {
+    const diffs = [];
+    const sName = staticNode?.component?.name || staticNode?.file;
+    const fName = fiberNode?.component?.name || fiberNode?.name;
+    
+    if (sName !== fName) {
+      diffs.push({ path, static: sName, fiber: fName, issue: 'name mismatch' });
+    }
+    
+    const sChildren = staticNode?.children || [];
+    const fChildren = fiberNode?.children || [];
+    
+    if (sChildren.length !== fChildren.length) {
+      diffs.push({ path: path + '/' + sName, staticCount: sChildren.length, fiberCount: fChildren.length, issue: 'child count mismatch' });
+    }
+    
+    return diffs;
+  }
+  
+  async function fetchStaticData() {
+    try {
+      const res = await fetch('/__overlay_data.json?route=' + encodeURIComponent(window.location.pathname));
+      return await res.json();
+    } catch (e) {
+      console.error('Failed to fetch static data:', e);
+      return null;
+    }
+  }
+
+  function buildFullTreeDataFlow(nodes, depth = 0) {
+    const result = [];
+    
+    for (const node of nodes) {
+      const comp = node.component;
+      const compName = comp?.name;
+      if (!compName) continue;
+      
+      const staticComp = staticComponentMap.get(compName);
+      const domEl = node.fiber ? getDomFromFiber(node.fiber) : null;
+      const live = domEl ? getLiveComponentData(domEl, compName) : { props: {}, state: [] };
+      const liveHooks = domEl ? getLiveHooks(domEl, compName) : [];
+      
+      const graph = buildDataFlowGraph(node, domEl, live.props || {}, liveHooks);
+      
+      result.push({
+        depth,
+        component: compName,
+        file: node.file,
+        isClient: staticComp?.isClientComponent || false,
+        isServer: staticComp?.isServerComponent || false,
+        propOrigins: graph.propOrigins.map(o => ({
+          prop: o.propName,
+          value: formatValue(o.value, 50),
+          sourceType: o.source.source,
+          sourceDetail: o.source.query || o.source.hookName || o.source.propName || null,
+          chainLength: o.chain.length
+        })),
+        hooks: staticComp?.hooks || [],
+        serverQueries: staticComp?.serverQueries || [],
+        issues: detectPotentialIssues(graph, staticComp),
+        refactorHints: detectRefactoringOpportunities(graph, staticComp),
+        children: node.children?.length || 0
+      });
+      
+      if (node.children?.length) {
+        result.push(...buildFullTreeDataFlow(node.children, depth + 1));
+      }
+    }
+    
+    return result;
+  }
 
   window.__REPO_OVERLAY__ = {
     toggle,
     show: () => { if (!isOpen) toggle(); },
     hide: () => { if (isOpen) toggle(); },
     setWidth: w => { panelWidth = w; shadow.querySelector(':host').style.setProperty('--panel-width', w + 'px'); localStorage.setItem('ro-panel-width', w.toString()); },
-    reload: reloadData,
+    refresh: refreshFiberTree,
+    toggleFilter: () => { filterEnabled = !filterEnabled; refreshFiberTree(); },
     getTree: () => TREE,
+    getFiberTree: () => FIBER_TREE,
+    getAllowlist: () => Array.from(componentAllowlist),
     logTree: () => console.log(JSON.stringify(TREE, null, 2)),
-    copyTree: () => { navigator.clipboard.writeText(JSON.stringify(TREE, null, 2)); console.log('Tree copied to clipboard'); }
+    copyTree: () => { navigator.clipboard.writeText(JSON.stringify(TREE, null, 2)); console.log('Tree copied to clipboard'); },
+    
+    debug: {
+      getStaticComponentMap,
+      getFiberTreeRaw: () => FIBER_TREE,
+      getDisplayTree: () => TREE,
+      getDisplayTreeClean: () => stripFiberRefs(TREE),
+      
+      async dumpAll() {
+        const staticData = await fetchStaticData();
+        const data = {
+          staticTree: staticData?.componentTree || null,
+          staticAllComponents: staticData?.allComponents || null,
+          staticStats: staticData?.stats || null,
+          fiberTree: FIBER_TREE.map(n => ({ name: n.name, source: n.source, childCount: n.children?.length || 0 })),
+          displayTree: stripFiberRefs(TREE),
+          componentMap: getStaticComponentMap(),
+          allowlist: Array.from(componentAllowlist),
+        };
+        console.log('=== DEBUG DATA ===');
+        console.log(JSON.stringify(data, null, 2));
+        return data;
+      },
+      
+      async compareStatic() {
+        const staticData = await fetchStaticData();
+        if (!staticData) return;
+        
+        console.log('=== STATIC TREE (from AST analysis) ===');
+        console.log('Components found:', staticData.allComponents?.length || 0);
+        console.log('Tree nodes:', staticData.componentTree?.length || 0);
+        
+        console.log('\\n=== STATIC COMPONENT INFO ===');
+        for (const comp of (staticData.allComponents || [])) {
+          console.log(comp.name + ':', {
+            file: comp.filePath,
+            props: comp.props,
+            hooks: comp.hooks,
+            isClient: comp.isClientComponent,
+            isServer: comp.isServerComponent,
+            nextjsType: comp.nextjsFileType,
+          });
+        }
+        
+        console.log('\\n=== FIBER TREE (from React DevTools) ===');
+        console.log('Components found:', FIBER_TREE.length);
+        for (const node of FIBER_TREE) {
+          console.log(node.name + ':', { source: node.source, children: node.children?.length || 0 });
+        }
+        
+        console.log('\\n=== DISPLAY TREE (what you see) ===');
+        console.log('Nodes:', countNodes(TREE));
+        
+        return { staticData, fiberTree: FIBER_TREE, displayTree: TREE };
+      },
+      
+      logStaticTree: async () => {
+        const data = await fetchStaticData();
+        console.log('=== STATIC COMPONENT TREE ===');
+        console.log(JSON.stringify(data?.componentTree, null, 2));
+        return data?.componentTree;
+      },
+      
+      logAllComponents: async () => {
+        const data = await fetchStaticData();
+        console.log('=== ALL COMPONENTS (with full info) ===');
+        console.log(JSON.stringify(data?.allComponents, null, 2));
+        return data?.allComponents;
+      },
+      
+      downloadCalculatedTree() {
+        const cleanTree = stripFiberRefs(TREE);
+        const blob = new Blob([JSON.stringify(cleanTree, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'calculated-tree.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      },
+      
+      logDataFlow() {
+        console.log('=== SERVER -> CLIENT DATA FLOW ===');
+        function findDataFlow(nodes, depth = 0) {
+          for (const node of nodes) {
+            const comp = node.component;
+            if (comp?.childDataFlow?.length) {
+              const indent = '  '.repeat(depth);
+              console.log(indent + comp.name + ' passes data to:');
+              for (const flow of comp.childDataFlow) {
+                console.log(indent + '  -> ' + flow.component + ':');
+                for (const [prop, source] of Object.entries(flow.props)) {
+                  const src = source.source === 'serverQuery' 
+                    ? 'serverQuery(' + source.query + ')' 
+                    : source.source;
+                  console.log(indent + '      ' + prop + ': ' + src);
+                }
+              }
+            }
+            if (node.children) findDataFlow(node.children, depth + 1);
+          }
+        }
+        findDataFlow(TREE);
+      },
+      
+      getFullDataFlow() {
+        return buildFullTreeDataFlow(TREE);
+      },
+      
+      exportForLLM() {
+        const dataFlow = buildFullTreeDataFlow(TREE);
+        const summary = {
+          route: ROUTE,
+          timestamp: new Date().toISOString(),
+          stats: {
+            totalComponents: dataFlow.length,
+            clientComponents: dataFlow.filter(c => c.isClient).length,
+            serverComponents: dataFlow.filter(c => c.isServer).length,
+            totalProps: dataFlow.reduce((sum, c) => sum + c.propOrigins.length, 0),
+            totalHooks: dataFlow.reduce((sum, c) => sum + c.hooks.length, 0),
+            totalQueries: dataFlow.reduce((sum, c) => sum + c.serverQueries.length, 0),
+          },
+          issues: dataFlow.flatMap(c => c.issues.map(i => ({ component: c.component, issue: i }))),
+          refactorOpportunities: dataFlow.flatMap(c => c.refactorHints.map(h => ({ component: c.component, hint: h }))),
+          components: dataFlow
+        };
+        return summary;
+      },
+      
+      copyFullDataFlow() {
+        const data = this.exportForLLM();
+        navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+        console.log('Full data flow copied to clipboard (' + data.components.length + ' components)');
+        return data;
+      },
+      
+      logFullDataFlow() {
+        const data = this.exportForLLM();
+        console.log('=== FULL PAGE DATA FLOW ANALYSIS ===');
+        console.log('Route:', data.route);
+        console.log('Stats:', data.stats);
+        console.log('\\n=== ISSUES ===');
+        for (const i of data.issues) {
+          console.log('  [' + i.component + '] ' + i.issue);
+        }
+        console.log('\\n=== REFACTOR OPPORTUNITIES ===');
+        for (const h of data.refactorOpportunities) {
+          console.log('  [' + h.component + '] ' + h.hint);
+        }
+        console.log('\\n=== COMPONENTS ===');
+        console.log(JSON.stringify(data.components, null, 2));
+        return data;
+      },
+    }
   };
 })();`;
 }

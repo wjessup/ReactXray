@@ -1,8 +1,13 @@
-import { createServer, request as httpRequest, IncomingMessage, ServerResponse } from "http";
+import {
+  createServer,
+  request as httpRequest,
+  IncomingMessage,
+  ServerResponse,
+} from "http";
 import { request as httpsRequest } from "https";
 import fs from "fs/promises";
 import path from "path";
-import { analyzeRoute } from "./analyze/index.js";
+import { analyzeRoute, getProjectComponentNames } from "./analyze/index.js";
 import { generateOverlayScript } from "./overlay/index.js";
 import type { ComponentTreeNode } from "./types.js";
 
@@ -28,6 +33,31 @@ export function startServer(options: ServerOptions): void {
   const overlayCache = new Map<string, { script: string; time: number }>();
   const CACHE_TTL = 5000;
 
+  let componentAllowlistCache: { names: string[]; time: number } | null = null;
+  const ALLOWLIST_CACHE_TTL = 30000;
+
+  async function getComponentAllowlist(): Promise<string[]> {
+    if (!projectPath) return [];
+    if (
+      componentAllowlistCache &&
+      Date.now() - componentAllowlistCache.time < ALLOWLIST_CACHE_TTL
+    ) {
+      return componentAllowlistCache.names;
+    }
+
+    try {
+      console.log("  Building component allowlist...");
+      const names = await getProjectComponentNames(projectPath);
+      const nameArray = Array.from(names);
+      componentAllowlistCache = { names: nameArray, time: Date.now() };
+      console.log(`  ✓ Found ${nameArray.length} project components`);
+      return nameArray;
+    } catch (err) {
+      console.error("  ✗ Failed to build allowlist:", (err as Error).message);
+      return [];
+    }
+  }
+
   async function getOverlayForRoute(route: string): Promise<string | null> {
     if (!projectPath) return null;
 
@@ -39,16 +69,31 @@ export function startServer(options: ServerOptions): void {
       const result = await analyzeRoute(projectPath, route);
       const script = generateOverlayScript(result);
       overlayCache.set(route, { script, time: Date.now() });
-      console.log(`  ✓ Generated overlay (${result.stats.totalComponents} components, ${countTreeNodes(result.componentTree)} tree nodes)`);
+      console.log(
+        `  ✓ Generated overlay (${
+          result.stats.totalComponents
+        } components, ${countTreeNodes(result.componentTree)} tree nodes)`
+      );
       return script;
     } catch (err) {
-      console.error(`  ✗ Failed to analyze route ${route}:`, (err as Error).message);
+      console.error(
+        `  ✗ Failed to analyze route ${route}:`,
+        (err as Error).message
+      );
       return null;
     }
   }
 
   if (proxyTarget) {
-    startProxyServer(port, proxyTarget, outputPath, projectPath, staticOverlay, getOverlayForRoute);
+    startProxyServer(
+      port,
+      proxyTarget,
+      outputPath,
+      projectPath,
+      staticOverlay,
+      getOverlayForRoute,
+      getComponentAllowlist
+    );
   } else {
     startStaticServer(port, outputPath);
   }
@@ -60,123 +105,177 @@ function startProxyServer(
   outputPath: string,
   projectPath: string | undefined,
   staticOverlay: string | undefined,
-  getOverlayForRoute: (route: string) => Promise<string | null>
+  getOverlayForRoute: (route: string) => Promise<string | null>,
+  getComponentAllowlist: () => Promise<string[]>
 ): void {
   const targetUrl = new URL(proxyTarget);
   const isHttps = targetUrl.protocol === "https:";
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.url?.startsWith("/__overlay/")) {
-      const file = req.url.slice(11);
-      try {
-        const content = await fs.readFile(path.join(outputPath, file), "utf-8");
+  const server = createServer(
+    async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.url?.startsWith("/__overlay/")) {
+        const file = req.url.slice(11);
+        try {
+          const content = await fs.readFile(
+            path.join(outputPath, file),
+            "utf-8"
+          );
+          res.setHeader("Content-Type", "application/javascript");
+          res.setHeader("Cache-Control", "no-cache");
+          res.end(content);
+        } catch {
+          res.statusCode = 404;
+          res.end("Not found");
+        }
+        return;
+      }
+
+      if (req.url?.startsWith("/__overlay_dynamic.js")) {
+        const referer = req.headers.referer;
+        let route = "/";
+        if (referer) {
+          try {
+            route = new URL(referer).pathname;
+          } catch {}
+        }
+        const script = await getOverlayForRoute(route);
         res.setHeader("Content-Type", "application/javascript");
         res.setHeader("Cache-Control", "no-cache");
-        res.end(content);
-      } catch {
-        res.statusCode = 404;
-        res.end("Not found");
+        res.end(script || "console.log('No overlay for this route');");
+        return;
       }
-      return;
-    }
 
-    if (req.url?.startsWith("/__overlay_dynamic.js")) {
-      const referer = req.headers.referer;
-      let route = "/";
-      if (referer) {
+      if (req.url?.startsWith("/__overlay_data.json")) {
+        const url = new URL(req.url, `http://localhost:${port}`);
+        const route = url.searchParams.get("route") || "/";
+        console.log(`  Fetching data for route: ${route}`);
         try {
-          route = new URL(referer).pathname;
-        } catch {}
-      }
-      const script = await getOverlayForRoute(route);
-      res.setHeader("Content-Type", "application/javascript");
-      res.setHeader("Cache-Control", "no-cache");
-      res.end(script || "console.log('No overlay for this route');");
-      return;
-    }
-
-    if (req.url?.startsWith("/__overlay_data.json")) {
-      const url = new URL(req.url, `http://localhost:${port}`);
-      const route = url.searchParams.get("route") || "/";
-      console.log(`  Fetching data for route: ${route}`);
-      try {
-        const result = await analyzeRoute(projectPath!, route);
-        res.setHeader("Content-Type", "application/json");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.end(JSON.stringify({
-          route: result.route,
-          componentTree: result.componentTree,
-          stats: result.stats,
-        }));
-        console.log(`  ✓ Data ready (${result.stats.totalComponents} components, ${countTreeNodes(result.componentTree)} tree nodes)`);
-      } catch (err) {
-        console.error(`  ✗ Failed:`, (err as Error).message);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ error: (err as Error).message }));
-      }
-      return;
-    }
-
-    const reqHeaders = { ...req.headers, host: targetUrl.host };
-    delete reqHeaders["accept-encoding"];
-
-    const proxyReq = makeRequest(
-      {
-        hostname: targetUrl.hostname,
-        port: targetUrl.port || (isHttps ? 443 : 80),
-        path: req.url,
-        method: req.method,
-        headers: reqHeaders,
-      },
-      (proxyRes) => {
-        const headers = { ...proxyRes.headers };
-        delete headers["content-security-policy"];
-        delete headers["content-security-policy-report-only"];
-        delete headers["x-content-security-policy"];
-
-        const contentType = headers["content-type"] || "";
-        const isHtml = contentType.includes("text/html");
-        const shouldInject = projectPath || staticOverlay;
-
-        if (isHtml && shouldInject) {
-          delete headers["content-length"];
-          delete headers["content-encoding"];
-          res.writeHead(proxyRes.statusCode || 200, headers);
-
-          const chunks: Buffer[] = [];
-          proxyRes.on("data", (chunk) => chunks.push(chunk));
-          proxyRes.on("end", () => {
-            let html = Buffer.concat(chunks).toString("utf-8");
-            const hasBody = html.includes("</body>");
-
-            const scriptTag = projectPath
-              ? `<script src="/__overlay_dynamic.js?t=${Date.now()}"></script>`
-              : `<script src="/__overlay/${staticOverlay}"></script>`;
-
-            if (hasBody) {
-              html = html.replace("</body>", `${scriptTag}</body>`);
-            } else {
-              html += scriptTag;
-            }
-            res.end(html);
-          });
-        } else {
-          res.writeHead(proxyRes.statusCode || 200, headers);
-          proxyRes.pipe(res);
+          const result = await analyzeRoute(projectPath!, route);
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.end(
+            JSON.stringify({
+              route: result.route,
+              componentTree: result.componentTree,
+              allComponents: result.allComponents,
+              stats: result.stats,
+            })
+          );
+          console.log(
+            `  ✓ Data ready (${
+              result.stats.totalComponents
+            } components, ${countTreeNodes(result.componentTree)} tree nodes)`
+          );
+        } catch (err) {
+          console.error(`  ✗ Failed:`, (err as Error).message);
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: (err as Error).message }));
         }
+        return;
       }
-    );
 
-    proxyReq.on("error", (err) => {
-      console.error("Proxy error:", err.message);
-      res.statusCode = 502;
-      res.end("Proxy error");
-    });
+      if (req.url?.startsWith("/__overlay_allowlist.json")) {
+        try {
+          const allowlist = await getComponentAllowlist();
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.end(JSON.stringify({ components: allowlist }));
+        } catch (err) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: (err as Error).message }));
+        }
+        return;
+      }
 
-    req.pipe(proxyReq);
-  });
+      if (req.url?.startsWith("/__save_calculated_tree") && req.method === "POST") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", async () => {
+          try {
+            const body = Buffer.concat(chunks).toString("utf-8");
+            const debugDir = path.join(process.cwd(), "debug");
+            await fs.mkdir(debugDir, { recursive: true });
+            await fs.writeFile(path.join(debugDir, "calculated-tree.json"), body);
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.end("ok");
+          } catch (err) {
+            res.statusCode = 500;
+            res.end((err as Error).message);
+          }
+        });
+        return;
+      }
+
+      if (req.url?.startsWith("/__save_calculated_tree") && req.method === "OPTIONS") {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.end();
+        return;
+      }
+
+      const reqHeaders = { ...req.headers, host: targetUrl.host };
+      delete reqHeaders["accept-encoding"];
+
+      const proxyReq = makeRequest(
+        {
+          hostname: targetUrl.hostname,
+          port: targetUrl.port || (isHttps ? 443 : 80),
+          path: req.url,
+          method: req.method,
+          headers: reqHeaders,
+        },
+        (proxyRes) => {
+          const headers = { ...proxyRes.headers };
+          delete headers["content-security-policy"];
+          delete headers["content-security-policy-report-only"];
+          delete headers["x-content-security-policy"];
+
+          const contentType = headers["content-type"] || "";
+          const isHtml = contentType.includes("text/html");
+          const shouldInject = projectPath || staticOverlay;
+
+          if (isHtml && shouldInject) {
+            delete headers["content-length"];
+            delete headers["content-encoding"];
+            res.writeHead(proxyRes.statusCode || 200, headers);
+
+            const chunks: Buffer[] = [];
+            proxyRes.on("data", (chunk) => chunks.push(chunk));
+            proxyRes.on("end", () => {
+              let html = Buffer.concat(chunks).toString("utf-8");
+              const hasBody = html.includes("</body>");
+
+              const scriptTag = projectPath
+                ? `<script src="/__overlay_dynamic.js?t=${Date.now()}"></script>`
+                : `<script src="/__overlay/${staticOverlay}"></script>`;
+
+              if (hasBody) {
+                html = html.replace("</body>", `${scriptTag}</body>`);
+              } else {
+                html += scriptTag;
+              }
+              res.end(html);
+            });
+          } else {
+            res.writeHead(proxyRes.statusCode || 200, headers);
+            proxyRes.pipe(res);
+          }
+        }
+      );
+
+      proxyReq.on("error", (err) => {
+        console.error("Proxy error:", err.message);
+        res.statusCode = 502;
+        res.end("Proxy error");
+      });
+
+      req.pipe(proxyReq);
+    }
+  );
 
   server.listen(port, () => {
     console.log(`\n🚀 Proxy server running at http://localhost:${port}`);
@@ -192,42 +291,53 @@ function startProxyServer(
 }
 
 function startStaticServer(port: number, outputPath: string): void {
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET");
+  const server = createServer(
+    async (req: IncomingMessage, res: ServerResponse) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET");
 
-    if (req.url === "/" || req.url === "/index.html") {
-      const files = await fs.readdir(outputPath);
-      const overlays = files.filter((f) => f.endsWith("-overlay.js"));
+      if (req.url === "/" || req.url === "/index.html") {
+        const files = await fs.readdir(outputPath);
+        const overlays = files.filter((f) => f.endsWith("-overlay.js"));
 
-      res.setHeader("Content-Type", "text/html");
-      res.end(`<!DOCTYPE html><html><head><title>Overlay Server</title></head>
+        res.setHeader("Content-Type", "text/html");
+        res.end(`<!DOCTYPE html><html><head><title>Overlay Server</title></head>
 <body style="font-family:monospace;background:#0d1117;color:#c9d1d9;padding:24px;">
 <h2 style="color:#58a6ff;">Available Overlays</h2>
-<ul>${overlays.map((f) => `<li><a href="/${f}" style="color:#7ee787;">${f}</a></li>`).join("")}</ul>
+<ul>${overlays
+          .map(
+            (f) => `<li><a href="/${f}" style="color:#7ee787;">${f}</a></li>`
+          )
+          .join("")}</ul>
 <h3 style="color:#58a6ff;margin-top:24px;">Quick Inject</h3>
 <p>Paste in browser console:</p>
-${overlays.map((f) => `<pre style="background:#161b22;padding:12px;border-radius:6px;color:#ffa657;">fetch('http://localhost:${port}/${f}').then(r=>r.text()).then(eval)</pre>`).join("")}
+${overlays
+  .map(
+    (f) =>
+      `<pre style="background:#161b22;padding:12px;border-radius:6px;color:#ffa657;">fetch('http://localhost:${port}/${f}').then(r=>r.text()).then(eval)</pre>`
+  )
+  .join("")}
 </body></html>`);
-      return;
-    }
+        return;
+      }
 
-    const file = req.url?.slice(1);
-    if (!file) {
-      res.statusCode = 404;
-      res.end("Not found");
-      return;
-    }
+      const file = req.url?.slice(1);
+      if (!file) {
+        res.statusCode = 404;
+        res.end("Not found");
+        return;
+      }
 
-    try {
-      const content = await fs.readFile(path.join(outputPath, file), "utf-8");
-      res.setHeader("Content-Type", "application/javascript");
-      res.end(content);
-    } catch {
-      res.statusCode = 404;
-      res.end("Not found");
+      try {
+        const content = await fs.readFile(path.join(outputPath, file), "utf-8");
+        res.setHeader("Content-Type", "application/javascript");
+        res.end(content);
+      } catch {
+        res.statusCode = 404;
+        res.end("Not found");
+      }
     }
-  });
+  );
 
   server.listen(port, () => {
     console.log(`\n🚀 Overlay server running at http://localhost:${port}`);

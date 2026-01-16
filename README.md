@@ -63,6 +63,37 @@ Then open `http://localhost:9876` instead of `localhost:3000`.
 - Static mode (`--overlay`): Uses a pre-generated overlay file
 - Route change detection: Overlay updates when you navigate
 
+### `debug` - Dump analysis data for debugging
+
+Outputs static analysis data to the `debug/` folder for inspection.
+
+```bash
+pnpm debug <project-path> <route>
+pnpm debug ~/Code/my-nextjs-app /search
+```
+
+Outputs:
+- `debug/static-tree.json` - Component tree from AST analysis
+- `debug/calculated-tree.json` - Merged tree (static + fiber) from browser
+- `debug/all-components.json` - Full ComponentInfo for each component
+- `debug/component-map.json` - Components indexed by name
+- `debug/stats.json` - Summary statistics
+- `debug/entry-files.json` - Layouts, pages, loading, error files
+
+### `verify` - Validate tree accuracy
+
+Compares the generated tree against actual source files to detect discrepancies.
+
+```bash
+pnpm verify <project-path> <tree-json>
+pnpm verify ~/Code/my-nextjs-app debug/static-tree.json
+```
+
+Reports:
+- **Missing children** - Components in source but not in tree
+- **Extra children** - Components in tree that shouldn't be direct children
+- Helps catch bugs in the static analysis logic
+
 ## Browser Overlay
 
 The overlay shows your React component tree alongside your running app.
@@ -95,6 +126,8 @@ window.__REPO_OVERLAY__.reload();
 
 ## Output Files
 
+### Analysis Output (`repo-analysis-output/`)
+
 | File                 | Contents                                                     |
 | -------------------- | ------------------------------------------------------------ |
 | `dependencies.json`  | Import graph, circular dependencies, orphan files            |
@@ -104,6 +137,17 @@ window.__REPO_OVERLAY__.reload();
 | `route-*.json`       | Component tree for a specific route                          |
 | `route-*.html`       | Static HTML visualization                                    |
 | `route-*-overlay.js` | Injectable browser overlay script                            |
+
+### Debug Output (`debug/`)
+
+| File                   | Contents                                              |
+| ---------------------- | ----------------------------------------------------- |
+| `static-tree.json`     | Component tree from AST analysis                      |
+| `calculated-tree.json` | Merged tree (static + React fiber) captured in browser|
+| `all-components.json`  | Full ComponentInfo for each detected component        |
+| `component-map.json`   | Components indexed by name for quick lookup           |
+| `stats.json`           | Summary: total components, client/server counts       |
+| `entry-files.json`     | Next.js entry points (layouts, pages, etc.)           |
 
 ## Analyzers
 
@@ -118,6 +162,16 @@ Recursive directory walk with metadata (size, extension). Ignores `node_modules`
 ### Components
 
 AST parsing with ts-morph to extract React components, their props, hooks, and client/server directives.
+
+**Detection criteria:**
+- PascalCase function/arrow function
+- Returns JSX (`<...>`) or `null`
+- Not a Next.js special export (`generateMetadata`, etc.)
+
+**Tree building:**
+- Respects JSX hierarchy - only direct children become tree children
+- Traverses through external library wrappers (e.g., finds components inside `<NextIntlClientProvider>`)
+- Stops at project component boundaries (children of `<MyComponent>` are built from MyComponent.tsx, not the caller)
 
 ### Routes
 
@@ -138,20 +192,39 @@ AI assistants reading raw files often miss the full picture. They see `page.tsx`
 
 This tool generates **synthesized context** that shows the relational structure—how components connect, what data flows through them, and where the boundaries are.
 
-## Roadmap: Data Flow Analysis
+## Data Flow Tracking
 
-Current gaps to address for better debugging/refactor support:
+The analyzer tracks how data flows from server to client:
 
-### Data Flow Tracking
+- **Server queries** - Async calls in server components (`await fetch()`, database queries)
+- **childDataFlow** - Props passed to child components with their source:
+  - `literal` - Hardcoded value
+  - `computed` - Derived from variables/expressions
+  - `serverQuery` - Data from a server-side fetch
 
-- **URL params / searchParams** - Track where `useSearchParams()` flows. Which components consume which params?
-- **React Query / SWR hooks** - What cache keys are used? What are the query dependencies?
-- **Context providers** - What wraps this route? What values flow down?
-- **Prop drilling detection** - Flag when data passes through 3+ components unchanged
+Example output:
+```json
+{
+  "name": "SearchPage",
+  "childDataFlow": [
+    { "component": "FilterProvider", "props": { "initialFilter": { "source": "serverQuery", "query": "parseFilter" } } },
+    { "component": "SpecimenGrid", "props": { "data": { "source": "serverQuery", "query": "specimenSearch" } } }
+  ]
+}
+```
+
+## Roadmap
+
+### Planned Improvements
+
+- **URL params / searchParams** - Track where `useSearchParams()` flows
+- **React Query / SWR hooks** - Cache key analysis and query dependencies
+- **Context providers** - Map what values flow through context
+- **Prop drilling detection** - Flag data passing through 3+ components unchanged
 
 ### Refactor Opportunity Detection
 
 - Components using the same hook with different keys (duplicate fetching)
 - Props passed through multiple layers that could be context
-- Client components that could be server components (no hooks, no event handlers)
+- Client components that could be server components
 - Circular data dependencies between components

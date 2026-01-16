@@ -165,6 +165,111 @@ program
   });
 
 program
+  .command("debug")
+  .description("Dump static analysis data to debug files for inspection")
+  .argument("<target>", "Path to the Next.js project")
+  .argument("<route>", "Route to analyze (e.g., /dashboard/settings)")
+  .option("-o, --out <dir>", "Output directory", path.join(projectRoot, "debug"))
+  .action(async (target: string, route: string, options: { out: string }) => {
+    const targetPath = path.resolve(target);
+    const outputPath = path.resolve(options.out);
+
+    if (!(await pathExists(targetPath))) {
+      console.error(`Error: Target directory does not exist: ${targetPath}`);
+      process.exit(1);
+    }
+
+    await fs.mkdir(outputPath, { recursive: true });
+
+    console.log(`\nDumping debug data for route: ${route}`);
+    console.log(`Project: ${targetPath}`);
+    console.log(`Output to: ${outputPath}\n`);
+
+    const result = await analyzeRoute(targetPath, route);
+
+    await fs.writeFile(
+      path.join(outputPath, "static-tree.json"),
+      JSON.stringify(result.componentTree, null, 2)
+    );
+    console.log("  ✓ static-tree.json (component tree from AST analysis)");
+
+    await fs.writeFile(
+      path.join(outputPath, "all-components.json"),
+      JSON.stringify(result.allComponents, null, 2)
+    );
+    console.log("  ✓ all-components.json (full ComponentInfo for each component)");
+
+    const componentMap: Record<string, unknown> = {};
+    for (const comp of result.allComponents) {
+      componentMap[comp.name] = comp;
+    }
+    await fs.writeFile(
+      path.join(outputPath, "component-map.json"),
+      JSON.stringify(componentMap, null, 2)
+    );
+    console.log("  ✓ component-map.json (components indexed by name)");
+
+    await fs.writeFile(
+      path.join(outputPath, "stats.json"),
+      JSON.stringify(result.stats, null, 2)
+    );
+    console.log("  ✓ stats.json");
+
+    await fs.writeFile(
+      path.join(outputPath, "entry-files.json"),
+      JSON.stringify(result.entryFiles, null, 2)
+    );
+    console.log("  ✓ entry-files.json (layouts, page, loading, error, etc.)");
+
+    console.log("\n=== SUMMARY ===");
+    console.log(`Route: ${result.route}`);
+    console.log(`Total components: ${result.stats.totalComponents}`);
+    console.log(`Client components: ${result.stats.clientComponents}`);
+    console.log(`Server components: ${result.stats.serverComponents}`);
+    console.log(`Unique hooks: ${result.stats.uniqueHooks.join(", ") || "none"}`);
+    
+    console.log("\n=== COMPONENT DETAILS ===");
+    for (const comp of result.allComponents) {
+      const badges = [];
+      if (comp.nextjsFileType) badges.push(comp.nextjsFileType.toUpperCase());
+      if (comp.isClientComponent) badges.push("CLIENT");
+      if (comp.isServerComponent) badges.push("SERVER");
+      const badgeStr = badges.length ? ` [${badges.join(", ")}]` : "";
+      console.log(`  ${comp.name}${badgeStr}`);
+      if (comp.props.length) console.log(`    props: ${comp.props.map(p => p.name + (p.optional ? "?" : "") + ": " + p.type).join(", ")}`);
+      if (comp.hooks.length) console.log(`    hooks: ${comp.hooks.join(", ")}`);
+      if (comp.childDataFlow?.length) {
+        for (const flow of comp.childDataFlow) {
+          const propsStr = Object.entries(flow.props)
+            .map(([k, v]: [string, { source: string; query?: string }]) => 
+              `${k}=${v.source === 'serverQuery' ? `serverQuery(${v.query})` : v.source}`)
+            .join(", ");
+          console.log(`    -> ${flow.component}(${propsStr})`);
+        }
+      }
+    }
+
+    console.log("\n=== SERVER -> CLIENT DATA FLOW ===");
+    for (const comp of result.allComponents) {
+      if (comp.childDataFlow?.length) {
+        for (const flow of comp.childDataFlow) {
+          const serverProps = Object.entries(flow.props)
+            .filter(([, v]: [string, { source: string }]) => v.source === 'serverQuery')
+            .map(([k, v]: [string, { source: string; query?: string }]) => `${k} <- ${v.query}()`);
+          if (serverProps.length) {
+            console.log(`  ${comp.name} -> ${flow.component}: ${serverProps.join(", ")}`);
+          }
+        }
+      }
+    }
+
+    console.log("\nDebug files written. Compare with fiber tree in browser using:");
+    console.log("  window.__REPO_OVERLAY__.debug.compareStatic()");
+    console.log("  window.__REPO_OVERLAY__.debug.logDataFlow()");
+    console.log("  window.__REPO_OVERLAY__.debug.downloadCalculatedTree()");
+  });
+
+program
   .command("serve")
   .description("Serve overlay scripts via local HTTP server for easy injection")
   .option("-p, --port <port>", "Port to serve on", "9876")

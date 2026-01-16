@@ -1,3 +1,6 @@
 /repo-analysis-output
 /node_modules
 /dist
+.cursor
+.pnpm-store
+/debug
