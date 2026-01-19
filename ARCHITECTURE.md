@@ -182,34 +182,115 @@ StandardLayout [SERVER] ─renders→ HeaderWithSearch [SERVER] ─renders→ Mo
 
 ### Implementation
 
+The merge algorithm walks the static tree and attaches fiber references where they match:
+
 ```javascript
-function mergeStaticWithFiber(staticNodes, fiberLookup) {
+function mergeStaticWithFiber(staticNodes, fiberLookup, usedFibers = new Set()) {
   return staticNodes.map(staticNode => {
     const compName = staticNode.component?.name;
-    const isClient = staticNode.component?.isClientComponent;
+    const isClientComponent = staticNode.component?.isClientComponent;
     
-    // Find matching fiber node
-    const fiberMatch = fiberLookup.get(compName);
-    
-    if (fiberMatch && isClient) {
-      // BRIDGE POINT: Use fiber's subtree
+    // Handle {children} slots (Next.js page injection points)
+    if (staticNode.file === '{children}') {
       return {
         ...staticNode,
-        fiber: fiberMatch.fiber,
-        children: fiberMatch.children,  // Fiber tree takes over
-        isBridge: true,
+        children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers),
+        isSlot: true,
       };
     }
     
-    // Server component: keep static structure
+    // Find matching fiber - fiberLookup returns array of candidates
+    // (multiple components can share the same name)
+    let fiberMatch = null;
+    if (compName && fiberLookup.has(compName)) {
+      const candidates = fiberLookup.get(compName);
+      for (const candidate of candidates) {
+        if (!usedFibers.has(candidate)) {
+          fiberMatch = candidate;
+          usedFibers.add(candidate);  // Mark as used to prevent double-matching
+          break;
+        }
+      }
+    }
+    
+    // BRIDGE POINT: Client component with fiber match
+    // We attach the fiber but KEEP recursing through static children
+    // (fiber children are available via fiber.child for runtime inspection)
+    if (fiberMatch && isClientComponent) {
+      return {
+        file: staticNode.file,
+        component: staticNode.component,
+        source: fiberMatch.source,
+        fiber: fiberMatch.fiber,  // Attach fiber reference for runtime data
+        children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers),
+        isBridge: true,
+        hasFiber: true,
+      };
+    }
+    
+    // Server component or unmatched: keep static structure
     return {
-      ...staticNode,
-      children: mergeStaticWithFiber(staticNode.children, fiberLookup),
-      isServerOnly: !fiberMatch && !isClient,
+      file: staticNode.file,
+      component: staticNode.component,
+      source: staticNode.component?.filePath ? { fileName: staticNode.component.filePath } : null,
+      fiber: fiberMatch?.fiber || null,
+      children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers),
+      isServerOnly: !fiberMatch && !isClientComponent,
+      hasFiber: !!fiberMatch,
     };
   });
 }
 ```
+
+**Key design decisions:**
+
+1. **`usedFibers` Set** - Prevents the same fiber node from matching multiple static nodes (e.g., two `<Button>` components)
+
+2. **Candidate arrays** - `fiberLookup.get(name)` returns an array because multiple components can have the same name. We pick the first unused match.
+
+3. **Static children preserved** - Unlike earlier designs, we DON'T replace children with fiber's children at bridge points. The static tree structure is authoritative; fiber references are attached for runtime data extraction (props, state, hooks).
+
+4. **`{children}` slots** - Next.js injects page content via `{children}`. These are marked with `isSlot: true` for special rendering.
+
+### Fiber Lookup Building
+
+Before merging, we build a lookup map from the captured fiber tree:
+
+```javascript
+function buildFiberLookupByName(fiberNodes, lookup = new Map()) {
+  for (const node of fiberNodes) {
+    if (node.name) {
+      if (!lookup.has(node.name)) lookup.set(node.name, []);
+      lookup.get(node.name).push(node);
+    }
+    if (node.children) buildFiberLookupByName(node.children, lookup);
+  }
+  return lookup;
+}
+```
+
+This flattens the fiber tree into a name-indexed map where each name maps to an array of all fiber nodes with that name.
+
+### Refresh Flow
+
+When the tree needs updating (initial load, navigation, manual refresh):
+
+```javascript
+function refreshFiberTree() {
+  FIBER_TREE = captureFullFiberTree();           // Walk React fiber from root
+  const filtered = filterFiberTree(FIBER_TREE);  // Remove non-project components if filter enabled
+  const fiberLookup = buildFiberLookupByName(filtered);
+  
+  TREE = mergeStaticWithFiber(
+    JSON.parse(JSON.stringify(STATIC_TREE)),     // Fresh copy of static tree
+    fiberLookup
+  );
+  
+  renderPanel();
+}
+```
+
+The static tree (`STATIC_TREE`) is computed once at build time by the proxy server. The fiber tree is captured fresh on each refresh from the live React fiber.
 
 ## Data Flow
 

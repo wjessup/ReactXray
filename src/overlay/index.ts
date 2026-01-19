@@ -822,7 +822,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   function getParentName(nodeId) {
     const parts = nodeId.split('-').map(Number);
     if (parts.length < 2) return null;
-    let current = TREE;
+    let current = DISPLAY_TREE;
     for (let i = 0; i < parts.length - 1; i++) {
       const node = current[parts[i]];
       if (!node) return null;
@@ -836,7 +836,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     const parts = nodeId.split('-').map(Number);
     if (parts.length === 0) return 0;
     
-    let current = TREE;
+    let current = DISPLAY_TREE;
     for (let i = 0; i < parts.length - 1; i++) {
       current = current[parts[i]]?.children || [];
     }
@@ -956,6 +956,109 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   let currentDetailDomEl = null;
   let currentTab = 'props';
   let currentDataFlowGraph = null;
+  let currentSourceCode = null;
+  let sourceLoadingState = 'idle';
+  const sourceCache = new Map();
+
+  async function fetchSourceCode(filePath) {
+    if (!filePath || filePath === 'unknown') return null;
+    if (sourceCache.has(filePath)) return sourceCache.get(filePath);
+    
+    try {
+      const res = await fetch('/__source_file?path=' + encodeURIComponent(filePath));
+      if (!res.ok) return null;
+      const data = await res.json();
+      sourceCache.set(filePath, data.content);
+      return data.content;
+    } catch (err) {
+      console.warn('[Overlay] Failed to fetch source:', err);
+      return null;
+    }
+  }
+
+  let hljsLoaded = false;
+  let hljsLoading = false;
+  let hljsStylesInjected = false;
+  
+  async function loadHighlightJs() {
+    if (hljsLoaded || hljsLoading) return;
+    hljsLoading = true;
+    
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js';
+    
+    await new Promise((resolve, reject) => {
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    
+    const tsScript = document.createElement('script');
+    tsScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js';
+    await new Promise((resolve, reject) => {
+      tsScript.onload = resolve;
+      tsScript.onerror = reject;
+      document.head.appendChild(tsScript);
+    });
+    
+    if (!hljsStylesInjected) {
+      const hljsStyles = document.createElement('style');
+      hljsStyles.textContent = \`
+        .hljs{color:#abb2bf;background:#282c34}
+        .hljs-comment,.hljs-quote{color:#5c6370;font-style:italic}
+        .hljs-doctag,.hljs-keyword,.hljs-formula{color:#c678dd}
+        .hljs-section,.hljs-name,.hljs-selector-tag,.hljs-deletion,.hljs-subst{color:#e06c75}
+        .hljs-literal{color:#56b6c2}
+        .hljs-string,.hljs-regexp,.hljs-addition,.hljs-attribute,.hljs-meta .hljs-string{color:#98c379}
+        .hljs-attr,.hljs-variable,.hljs-template-variable,.hljs-type,.hljs-selector-class,.hljs-selector-attr,.hljs-selector-pseudo,.hljs-number{color:#d19a66}
+        .hljs-symbol,.hljs-bullet,.hljs-link,.hljs-meta,.hljs-selector-id,.hljs-title{color:#61aeee}
+        .hljs-built_in,.hljs-title.class_,.hljs-class .hljs-title{color:#e6c07b}
+        .hljs-emphasis{font-style:italic}
+        .hljs-strong{font-weight:700}
+        .hljs-link{text-decoration:underline}
+      \`;
+      shadow.appendChild(hljsStyles);
+      hljsStylesInjected = true;
+    }
+    
+    hljsLoaded = true;
+    hljsLoading = false;
+  }
+
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function highlightCode(code, language) {
+    if (window.hljs && hljsLoaded) {
+      try {
+        const result = window.hljs.highlight(code, { language: language || 'typescript', ignoreIllegals: true });
+        console.log('[Overlay] Highlighted code with hljs, language:', language);
+        return result.value;
+      } catch (e) {
+        console.warn('[Overlay] hljs highlight failed:', e);
+        return escapeHtml(code);
+      }
+    }
+    console.warn('[Overlay] hljs not loaded, returning escaped code');
+    return escapeHtml(code);
+  }
+
+  function renderSourceCode(code, filePath) {
+    if (!code) return '<div class="detail-empty">Source not available</div>';
+    
+    const ext = filePath.split('.').pop() || 'tsx';
+    const langMap = { tsx: 'typescript', ts: 'typescript', jsx: 'javascript', js: 'javascript', css: 'css', json: 'json' };
+    const language = langMap[ext] || 'typescript';
+    
+    const highlighted = highlightCode(code, language);
+    
+    return '<div class="source-container"><div class="source-header"><span class="source-path">' + escapeHtml(filePath) + '</span><button class="source-copy-btn" title="Copy source">📋 Copy</button><button class="source-open-btn" title="Open in editor">↗ Open</button></div><div class="source-code"><pre><code class="hljs language-' + language + '">' + highlighted + '</code></pre></div></div>';
+  }
 
   function renderTree(nodes, depth = 0, prefix = '') {
     return nodes.map((node, i) => {
@@ -981,22 +1084,34 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       const staticComp = name !== '—' ? staticComponentMap.get(name) : null;
       const isServerOnly = node.isServerOnly;
       const isBridge = node.isBridge;
+      const hasFiber = node.hasFiber;
       const badges = [];
       
       if (staticComp?.nextjsFileType) {
         const fileTypeIcons = { page: '📄', layout: '📐', loading: '⏳', error: '⚠️', template: '📋', 'not-found': '🔍' };
+        const fileTypeDescriptions = {
+          page: 'Next.js Page — Route entry point that renders at this URL path',
+          layout: 'Next.js Layout — Shared UI wrapper that persists across child routes',
+          loading: 'Next.js Loading — Suspense fallback shown while route loads',
+          error: 'Next.js Error Boundary — Catches and displays errors in this route segment',
+          template: 'Next.js Template — Like layout but re-mounts on navigation',
+          'not-found': 'Next.js Not Found — Shown when route segment has no match'
+        };
         const icon = fileTypeIcons[staticComp.nextjsFileType] || '';
-        if (icon) badges.push('<span class="badge nextjs" title="' + staticComp.nextjsFileType + '">' + icon + '</span>');
+        const desc = fileTypeDescriptions[staticComp.nextjsFileType] || staticComp.nextjsFileType;
+        if (icon) badges.push('<span class="badge nextjs" title="' + desc + '">' + icon + '</span>');
       }
       
       if (isBridge) {
-        badges.push('<span class="badge client bridge" title="Client boundary - first client component">CLIENT</span>');
+        badges.push('<span class="badge client bridge" title="\\'use client\\' — ACTIVE (solid blue)&#10;&#10;This file has \\'use client\\' AND is currently hydrated/running in the browser.&#10;&#10;• Found in React\\'s fiber tree (actively rendered)&#10;• Component is mounted and interactive&#10;• Can inspect live props, state, hooks">\\'use client\\'</span>');
       } else if (staticComp?.isClientComponent) {
-        badges.push('<span class="badge client" title="Client Component (hydrated)">CLIENT</span>');
-      } else if (isServerOnly) {
-        badges.push('<span class="badge server rsc" title="Server-only (no fiber, rendered on server)">SERVER</span>');
-      } else if (!staticComp?.isClientComponent && staticComp) {
-        badges.push('<span class="badge server" title="Server Component">SERVER</span>');
+        badges.push('<span class="badge client" title="\\'use client\\' — NOT ACTIVE (faded blue)&#10;&#10;This file has \\'use client\\' but is NOT currently in the React fiber tree.&#10;&#10;Possible reasons:&#10;• Component is conditionally hidden (CSS/responsive)&#10;• Component hasn\\'t mounted yet&#10;• Component is inside an unrendered branch&#10;&#10;The directive exists in source, but component isn\\'t running right now.">\\'use client\\' ⏸</span>');
+      } else if (isServerOnly && !hasFiber) {
+        badges.push('<span class="badge server rsc" title="SERVER ONLY (solid green)&#10;&#10;This component runs ONLY on the server — zero JavaScript sent to browser.&#10;&#10;• No \\'use client\\' directive&#10;• Not imported by any client component&#10;• Can directly access databases, filesystems, secrets&#10;• Can use async/await at component level&#10;• Output is pure HTML streamed to client">SERVER ONLY</span>');
+      } else if (hasFiber && !staticComp?.isClientComponent) {
+        badges.push('<span class="badge client inherited" title="RUNS ON CLIENT (inherited, dashed blue)&#10;&#10;This file has NO \\'use client\\' directive, but runs on the client anyway!&#10;&#10;Why? A parent component with \\'use client\\' imports this file.&#10;When a client component imports another component, that import becomes client code too.&#10;&#10;• The component itself didn\\'t opt-in to client&#10;• A parent\\'s \\'use client\\' pulled it into the client bundle&#10;• Consider adding \\'use client\\' if this is intentional">↳ client</span>');
+      } else if (!staticComp?.isClientComponent && staticComp && !hasFiber) {
+        badges.push('<span class="badge server" title="SERVER COMPONENT (green)&#10;&#10;This component renders on the server.&#10;&#10;• No \\'use client\\' directive&#10;• Executes during server render&#10;• May pass props to client children&#10;• Cannot use client-side hooks directly">SERVER</span>');
       }
       
       const hooksCount = staticComp?.hooks?.length || 0;
@@ -1042,13 +1157,15 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     }).join('');
   }
 
+  let DISPLAY_TREE = [];
+  
   function renderPanel() {
-    const filteredTree = filterIgnoredNodes(TREE);
+    DISPLAY_TREE = filterIgnoredNodes(TREE);
     const treeContent = isLoading 
       ? '<div class="loading"><div class="loading-spinner"></div><div class="loading-text">Analyzing components...</div></div>'
-      : filteredTree.length === 0
+      : DISPLAY_TREE.length === 0
         ? '<div class="loading"><div class="loading-text">No components found</div></div>'
-        : renderTree(filteredTree);
+        : renderTree(DISPLAY_TREE);
 
     const filterLabel = filterEnabled ? 'FILTERED' : 'ALL';
     const ignoredCount = ignoredPaths.filter(p => p.trim()).length;
@@ -1261,7 +1378,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         shadow.querySelectorAll('.node-header.selected').forEach(el => el.classList.remove('selected'));
         header.classList.add('selected');
 
-        const treeNode = findNodeById(TREE, nodeId);
+        const treeNode = findNodeById(DISPLAY_TREE, nodeId);
         let domEl = null;
 
         if (selectedFiber && getFiberName(selectedFiber) === name) {
@@ -1308,7 +1425,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         e.stopPropagation();
         const name = node.dataset.name;
         const nodeId = node.dataset.id;
-        const treeNode = findNodeById(TREE, nodeId);
+        const treeNode = findNodeById(DISPLAY_TREE, nodeId);
         if (treeNode) {
           const domEl = findBestMatchingElement(treeNode, nodeId);
           if (domEl) showHoverHighlight(domEl, name);
@@ -1323,7 +1440,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       header.addEventListener('dblclick', e => {
         e.stopPropagation(); e.stopImmediatePropagation();
         const nodeId = node.dataset.id;
-        const treeNode = findNodeById(TREE, nodeId);
+        const treeNode = findNodeById(DISPLAY_TREE, nodeId);
         const filePath = treeNode?.source?.fileName || node.dataset.file;
         const lineNumber = treeNode?.source?.lineNumber || 1;
         if (filePath && filePath !== 'unknown') {
@@ -1431,6 +1548,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     currentDetailNode = node;
     currentDetailDomEl = domEl;
     currentTab = 'props';
+    currentSourceCode = null;
+    sourceLoadingState = 'idle';
 
     if (!detailOverlay) {
       detailOverlay = document.createElement('div');
@@ -1443,7 +1562,44 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         if (e.target === detailOverlay || e.target.classList.contains('detail-close')) hideDetailDialog();
         if (e.target.classList.contains('detail-tab')) {
           const newTab = e.target.dataset.tab;
-          if (newTab && newTab !== currentTab) { currentTab = newTab; renderDetailContent(); }
+          if (newTab && newTab !== currentTab) {
+            currentTab = newTab;
+            if (newTab === 'source' && !currentSourceCode) {
+              const node = currentDetailNode;
+              const staticComp = node?.component?.name ? staticComponentMap.get(node.component.name) : null;
+              const filePath = node?.source?.fileName || node?.file || staticComp?.filePath;
+              if (filePath && filePath !== 'unknown') {
+                sourceLoadingState = 'loading';
+                renderDetailContent();
+                Promise.all([loadHighlightJs(), fetchSourceCode(filePath)]).then(([_, code]) => {
+                  currentSourceCode = code;
+                  sourceLoadingState = 'done';
+                  renderDetailContent();
+                });
+              } else {
+                renderDetailContent();
+              }
+            } else {
+              renderDetailContent();
+            }
+          }
+        }
+        if (e.target.classList.contains('source-copy-btn')) {
+          if (currentSourceCode) {
+            navigator.clipboard.writeText(currentSourceCode);
+            e.target.textContent = '✓ Copied!';
+            setTimeout(() => { e.target.textContent = '📋 Copy'; }, 1500);
+          }
+        }
+        if (e.target.classList.contains('source-open-btn')) {
+          const node = currentDetailNode;
+          const staticComp = node?.component?.name ? staticComponentMap.get(node.component.name) : null;
+          const filePath = node?.source?.fileName || node?.file || staticComp?.filePath;
+          const lineNumber = node?.source?.lineNumber || 1;
+          if (filePath && filePath !== 'unknown') {
+            const uri = 'cursor://file/' + filePath + ':' + lineNumber;
+            window.open(uri);
+          }
         }
         if (e.target.classList.contains('copy-llm-btn')) {
           const node = currentDetailNode;
@@ -1758,138 +1914,139 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   function renderDataFlowGraph(graph) {
     if (!graph || !graph.propOrigins.length) return '<div class="detail-empty">No props detected for this component</div>';
     
-    const typeColors = {
-      component: '#58a6ff',
-      prop: '#ffa657',
+    const sourceColors = {
       hook: '#d2a8ff',
       query: '#7ee787',
-      context: '#f778ba',
-      literal: '#8b949e',
-      computed: '#f0883e',
       serverQuery: '#7ee787',
+      prop: '#ffa657',
+      context: '#f778ba',
+      computed: '#f0883e',
+      literal: '#8b949e',
       unknown: '#484f58'
     };
     
-    const typeIcons = {
-      component: '📦',
-      prop: '📌',
+    const sourceIcons = {
       hook: '⚡',
       query: '🔍',
-      context: '🌐',
-      literal: '📝',
-      computed: '⚙️',
       serverQuery: '🔍',
+      prop: '↑',
+      context: '🌐',
+      computed: '⚙️',
+      literal: '📝',
       unknown: '❓'
     };
     
+    function getTypeCategory(typeStr) {
+      if (!typeStr) return 'unknown';
+      const t = typeStr.toLowerCase();
+      if (t.includes('=>') || t.includes('function') || t.includes('void')) return 'function';
+      if (t === 'boolean' || t.includes('boolean')) return 'boolean';
+      if (t === 'number' || t.includes('number')) return 'number';
+      if (t === 'string' || t.includes('string')) return 'string';
+      if (t.startsWith('{') || t.includes('interface')) return 'object';
+      if (t.includes('[]') || t.startsWith('array')) return 'array';
+      return 'type';
+    }
+    
+    function formatType(typeStr) {
+      if (!typeStr) return '';
+      let t = typeStr
+        .replace(/import\([^)]+\)\./g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (t.length > 40) {
+        t = t.slice(0, 37) + '...';
+      }
+      return t;
+    }
+    
     let html = '<div class="dataflow-graph">';
     
-    html += '<div class="dataflow-legend">';
-    const legendTypes = ['component', 'prop', 'hook', 'query', 'computed', 'literal'];
-    for (const type of legendTypes) {
-      html += '<span class="legend-item"><span class="legend-dot" style="background:' + typeColors[type] + '"></span>' + typeIcons[type] + ' ' + type + '</span>';
-    }
-    html += '</div>';
-    
     html += '<div class="dataflow-origins">';
-    html += '<h4>Prop Origins (' + graph.propOrigins.length + ' props)</h4>';
     
     for (const origin of graph.propOrigins) {
       const sourceType = origin.source.source === 'serverQuery' ? 'query' : origin.source.source;
-      const sourceColor = typeColors[sourceType] || typeColors.unknown;
-      const sourceIcon = typeIcons[sourceType] || typeIcons.unknown;
+      const sourceColor = sourceColors[sourceType] || sourceColors.unknown;
+      const sourceIcon = sourceIcons[sourceType] || sourceIcons.unknown;
       const hasChain = origin.chain.length > 1;
+      const typeCategory = getTypeCategory(origin.type);
+      const formattedType = formatType(origin.type);
+      const isFunction = typeCategory === 'function';
+      const isOptional = origin.optional;
       
-      html += '<div class="origin-block' + (hasChain ? ' has-chain' : '') + '">';
+      html += '<div class="df-row' + (hasChain ? ' traced' : '') + '">';
       
-      html += '<div class="origin-row">';
-      html += '<div class="origin-prop">';
-      html += '<span class="origin-icon">' + typeIcons.prop + '</span>';
-      html += '<span class="origin-name">' + origin.propName + '</span>';
-      if (origin.type) {
-        html += '<span class="origin-type">' + origin.type + '</span>';
-      }
-      if (origin.optional) {
-        html += '<span class="origin-optional">?</span>';
+      html += '<div class="df-prop">';
+      html += '<span class="df-name' + (isFunction ? ' fn' : '') + '">' + origin.propName + '</span>';
+      if (isOptional) html += '<span class="df-opt">?</span>';
+      if (formattedType) {
+        html += '<span class="df-type ' + typeCategory + '" title="' + (origin.type || '').replace(/"/g, '&quot;') + '">' + formattedType + '</span>';
       }
       html += '</div>';
-      html += '<div class="origin-arrow">←</div>';
-      html += '<div class="origin-source" style="border-color:' + sourceColor + '">';
-      html += '<span class="origin-icon">' + sourceIcon + '</span>';
+      
+      html += '<div class="df-source" style="--src-color:' + sourceColor + '">';
+      html += '<span class="df-src-icon">' + sourceIcon + '</span>';
       
       if (origin.source.source === 'serverQuery') {
-        html += '<span class="origin-label query">' + (origin.source.query || 'query') + '()</span>';
+        html += '<span class="df-src-label">' + (origin.source.query || 'query') + '()</span>';
       } else if (origin.source.source === 'hook') {
-        html += '<span class="origin-label hook">' + (origin.source.hookName || 'hook') + '</span>';
+        html += '<span class="df-src-label">' + (origin.source.hookName || 'hook') + '</span>';
       } else if (origin.source.source === 'prop') {
-        html += '<span class="origin-label prop">↑ ' + (origin.source.propName || 'parent') + '</span>';
+        html += '<span class="df-src-label">from parent</span>';
       } else if (origin.source.source === 'context') {
-        html += '<span class="origin-label context">' + (origin.source.contextName || 'context') + '</span>';
+        html += '<span class="df-src-label">' + (origin.source.contextName || 'context') + '</span>';
       } else if (origin.source.source === 'computed') {
-        html += '<span class="origin-label computed">computed</span>';
+        html += '<span class="df-src-label">computed</span>';
       } else if (origin.source.source === 'literal') {
-        html += '<span class="origin-label literal">literal</span>';
+        html += '<span class="df-src-label">literal</span>';
       } else {
-        html += '<span class="origin-label unknown">' + origin.source.source + '</span>';
+        html += '<span class="df-src-label">unknown</span>';
       }
       
       html += '</div>';
       html += '</div>';
       
       if (hasChain) {
-        html += '<div class="origin-chain">';
-        html += '<div class="chain-title">Data flow trace:</div>';
-        html += '<div class="chain-flow">';
-        
+        html += '<div class="df-chain">';
         for (let i = origin.chain.length - 1; i >= 0; i--) {
           const link = origin.chain[i];
-          const linkType = link.type === 'serverQuery' ? 'query' : link.type;
-          const linkColor = typeColors[linkType] || typeColors.component;
-          const linkIcon = typeIcons[linkType] || typeIcons.component;
+          const isLast = i === 0;
           
-          html += '<div class="chain-step">';
-          html += '<span class="chain-link" style="border-color:' + linkColor + '">';
-          html += '<span class="chain-icon">' + linkIcon + '</span>';
-          html += '<span class="chain-comp">' + link.componentName + '</span>';
+          html += '<span class="df-chain-item' + (isLast ? ' target' : '') + '">';
+          html += '<span class="df-chain-comp">' + link.componentName + '</span>';
           
           if (link.queryName) {
-            html += '<span class="chain-detail query">.' + link.queryName + '()</span>';
+            html += '<span class="df-chain-via query">.' + link.queryName + '()</span>';
           } else if (link.hookName) {
-            html += '<span class="chain-detail hook">.' + link.hookName + '()</span>';
+            html += '<span class="df-chain-via hook">.' + link.hookName + '()</span>';
           } else if (link.propName) {
-            html += '<span class="chain-detail prop">.' + link.propName + '</span>';
-          } else if (link.expression) {
-            html += '<span class="chain-detail">' + link.expression + '</span>';
+            html += '<span class="df-chain-via prop">.' + link.propName + '</span>';
           }
           
           html += '</span>';
-          if (i > 0) html += '<span class="chain-arrow">→</span>';
-          html += '</div>';
+          if (!isLast) html += '<span class="df-chain-arrow">→</span>';
         }
-        
-        html += '</div></div>';
+        html += '</div>';
       }
-      
-      html += '</div>';
     }
     
     html += '</div>';
     
-    html += '<div class="dataflow-summary">';
     const hookCount = graph.nodes.filter(n => n.type === 'hook').length;
     const queryCount = graph.nodes.filter(n => n.type === 'query').length;
     const propCount = graph.propOrigins.length;
     const tracedCount = graph.propOrigins.filter(p => p.chain.length > 1).length;
+    const fnCount = graph.propOrigins.filter(p => getTypeCategory(p.type) === 'function').length;
     
-    html += '<div class="summary-stat"><span class="stat-icon">' + typeIcons.prop + '</span><span class="stat-num">' + propCount + '</span> props</div>';
-    html += '<div class="summary-stat"><span class="stat-icon">🔗</span><span class="stat-num">' + tracedCount + '</span> traced</div>';
-    html += '<div class="summary-stat"><span class="stat-icon">' + typeIcons.hook + '</span><span class="stat-num">' + hookCount + '</span> hooks</div>';
-    html += '<div class="summary-stat"><span class="stat-icon">' + typeIcons.query + '</span><span class="stat-num">' + queryCount + '</span> queries</div>';
+    html += '<div class="df-summary">';
+    html += '<span class="df-stat">' + propCount + ' props</span>';
+    html += '<span class="df-stat traced">' + tracedCount + ' traced</span>';
+    if (fnCount > 0) html += '<span class="df-stat fn">' + fnCount + ' callbacks</span>';
     html += '</div>';
     
     html += '<div class="dataflow-actions">';
-    html += '<button class="copy-llm-btn" title="Copy graph as JSON for LLM analysis">📋 Copy for LLM</button>';
-    html += '<button class="copy-mermaid-btn" title="Copy as Mermaid diagram">📊 Copy Mermaid</button>';
+    html += '<button class="copy-llm-btn" title="Copy as JSON for LLM">📋 Copy for LLM</button>';
+    html += '<button class="copy-mermaid-btn" title="Copy as Mermaid diagram">📊 Mermaid</button>';
     html += '</div>';
     
     html += '</div>';
@@ -2066,6 +2223,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       { id: 'state', label: 'State', count: live.state?.length || 0 },
       { id: 'hooks', label: 'Hooks', count: mergedHooks.length || staticHookNames.length },
       { id: 'dataflow', label: 'Data Flow', count: currentDataFlowGraph.propOrigins.length },
+      { id: 'source', label: 'Source', count: 0 },
     ];
 
     const tabsHtml = tabs.map(t => '<button class="detail-tab ' + (currentTab === t.id ? 'active' : '') + '" data-tab="' + t.id + '">' + t.label + (t.count ? ' (' + t.count + ')' : '') + '</button>').join('');
@@ -2096,6 +2254,15 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       } else contentHtml = '<div class="detail-empty">No hooks detected</div>';
     } else if (currentTab === 'dataflow') {
       contentHtml = renderDataFlowGraph(currentDataFlowGraph);
+    } else if (currentTab === 'source') {
+      const filePath = node.source?.fileName || node.file || staticComp?.filePath;
+      if (sourceLoadingState === 'loading') {
+        contentHtml = '<div class="source-loading"><div class="loading-spinner"></div><div class="loading-text">Loading source...</div></div>';
+      } else if (currentSourceCode) {
+        contentHtml = renderSourceCode(currentSourceCode, filePath);
+      } else {
+        contentHtml = '<div class="detail-empty">Source not available</div>';
+      }
     }
 
     const headerBadges = [];
@@ -2171,17 +2338,17 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   function selectTreeNodeByStack(stack) {
-    const result = findNodeByAncestry(TREE, stack, '', []);
+    const result = findNodeByAncestry(DISPLAY_TREE, stack, '', []);
     if (result && selectTreeNodeById(result.nodeId)) return result.nodeId;
 
     for (let i = 1; i < stack.length; i++) {
       const shiftedStack = stack.slice(i);
-      const fallback = findNodeByAncestry(TREE, shiftedStack, '', []);
+      const fallback = findNodeByAncestry(DISPLAY_TREE, shiftedStack, '', []);
       if (fallback && selectTreeNodeById(fallback.nodeId)) return fallback.nodeId;
     }
 
     for (const name of stack) {
-      const fallback = findFirstNodeWithName(TREE, name);
+      const fallback = findFirstNodeWithName(DISPLAY_TREE, name);
       if (fallback && selectTreeNodeById(fallback.nodeId)) return fallback.nodeId;
     }
     return null;

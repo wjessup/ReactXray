@@ -113,6 +113,35 @@ The overlay shows your React component tree alongside your running app.
 - **Double-click** - Opens file in VS Code
 - **Drag left edge** - Resize panel width
 
+### Component Badges
+
+Each component in the tree shows badges indicating its render context. Hover any badge for a detailed explanation.
+
+| Badge | Style | Meaning |
+|-------|-------|---------|
+| `'use client'` | Solid blue | File has `'use client'` directive, actively hydrated in browser |
+| `'use client' ⏸` | Faded blue | Has directive but component not currently rendered (hidden/unmounted) |
+| `↳ client` | Dashed blue, italic | No directive, but runs on client because a parent with `'use client'` imports it |
+| `SERVER ONLY` | Solid green | Pure React Server Component - zero JS sent to browser |
+| `SERVER` | Light green | Server component (may have client children) |
+| 📄 📐 ⏳ etc. | Purple | Next.js file type (page, layout, loading, error, template, not-found) |
+
+**Key distinction:**
+- `'use client'` = You explicitly added the directive to this file
+- `↳ client` = No directive, but inherited client execution from a parent import
+
+### Component Details Dialog
+
+Click the **ℹ️** button on any component to open a detailed inspector with tabs:
+
+| Tab | Contents |
+|-----|----------|
+| **Props** | Live props with types, values, and optional markers |
+| **State** | Current useState values from React fiber |
+| **Hooks** | All hooks used (useState, useEffect, useMemo, etc.) |
+| **Data Flow** | Where each prop originates - traces through parent components to find server queries, hooks, or context |
+| **Source** | Full source code with syntax highlighting, copy button, and "Open in editor" |
+
 ### Route Change Detection
 
 When paused, navigate to a different route. The overlay automatically:
@@ -122,10 +151,40 @@ When paused, navigate to a different route. The overlay automatically:
 3. Analyzes the new route
 4. Updates the component tree
 
-### Manual Reload
+### Settings
+
+Click the **⚙️** button to configure ignored paths. Components from these paths are hidden from the tree:
+- `components/ui` - Hide shadcn/ui primitives
+- `@radix-ui` - Hide Radix UI internals
+- `node_modules` - Hide all library components
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+C` | Toggle overlay panel |
+| `Ctrl+Shift+P` | Pause/resume inspect mode |
+| `Escape` | Close detail dialog or settings |
+
+### Console API
 
 ```javascript
-window.__REPO_OVERLAY__.reload();
+// Toggle overlay
+window.__REPO_OVERLAY__.toggle();
+
+// Refresh analysis for current route
+window.__REPO_OVERLAY__.refresh();
+
+// Get the current component tree
+window.__REPO_OVERLAY__.getTree();
+
+// Copy tree as JSON to clipboard
+window.__REPO_OVERLAY__.copyTree();
+
+// Debug utilities
+window.__REPO_OVERLAY__.debug.dumpAll();           // Full debug data
+window.__REPO_OVERLAY__.debug.logDataFlow();       // Server→client data flow
+window.__REPO_OVERLAY__.debug.copyFullDataFlow();  // Copy data flow analysis for LLM
 ```
 
 ## Output Files

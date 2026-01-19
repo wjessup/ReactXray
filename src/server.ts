@@ -210,6 +210,35 @@ function startProxyServer(
         return;
       }
 
+      if (req.url?.startsWith("/__source_file")) {
+        const url = new URL(req.url, `http://localhost:${port}`);
+        const filePath = url.searchParams.get("path");
+        if (!filePath || !projectPath) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: "Missing path parameter" }));
+          return;
+        }
+        
+        const normalizedPath = filePath.startsWith("/") ? filePath : path.join(projectPath, filePath);
+        if (!normalizedPath.startsWith(projectPath)) {
+          res.statusCode = 403;
+          res.end(JSON.stringify({ error: "Access denied" }));
+          return;
+        }
+        
+        try {
+          const content = await fs.readFile(normalizedPath, "utf-8");
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.end(JSON.stringify({ path: normalizedPath, content }));
+        } catch (err) {
+          res.statusCode = 404;
+          res.end(JSON.stringify({ error: "File not found", path: normalizedPath }));
+        }
+        return;
+      }
+
       if (req.url?.startsWith("/__save_calculated_tree") && req.method === "POST") {
         const chunks: Buffer[] = [];
         req.on("data", (chunk) => chunks.push(chunk));
