@@ -238,14 +238,35 @@ export const OVERLAY_CSS = `
   }
 
   .info-btn {
-    color: #6e7681;
-    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    background: #21262d;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 600;
     cursor: pointer;
-    padding: 0 2px;
     flex-shrink: 0;
+    transition: all 0.15s;
+    margin-left: 2px;
   }
 
-  .info-btn:hover { color: #58a6ff; }
+  .info-btn:hover {
+    background: #388bfd;
+    border-color: #58a6ff;
+    color: #fff;
+    transform: scale(1.1);
+  }
+  
+  .node-header.selected .info-btn {
+    background: #388bfd44;
+    border-color: #58a6ff;
+    color: #58a6ff;
+  }
 
   .render-count {
     font-size: 9px;

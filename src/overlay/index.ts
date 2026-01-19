@@ -1268,9 +1268,16 @@ export function generateOverlayScript(data: RouteAnalysis): string {
           domEl = selectedElement || getDomFromFiber(selectedFiber);
         }
 
-        if (domEl && document.contains(domEl)) {
+        const isRealNode = domEl instanceof Node;
+        const isInDocument = isRealNode ? document.contains(domEl) : (domEl?._elements?.some(el => document.contains(el)) ?? false);
+        
+        if (domEl && isInDocument) {
           showSelectedHighlight(domEl, name);
-          domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          if (isRealNode) {
+            domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else if (domEl._elements?.[0]) {
+            domEl._elements[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
         } else {
           hideSelectedHighlight();
         }
