@@ -1,3 +1,7 @@
+#  
+
+pnpm serve:watch --proxy http://localhost:3000 --project ~/Code/crystal-market-mvp/web-app
+
 # Repo Analyzer
 
 CLI tool that analyzes JavaScript/TypeScript codebases and generates JSON artifacts for AI consumption. Includes a browser overlay for visualizing React component trees on live sites.

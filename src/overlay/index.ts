@@ -24,6 +24,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   let isLoading = true;
   let isPaused = false;
   let searchTerm = '';
+  let ignoredPaths = JSON.parse(localStorage.getItem('ro-ignored-paths') || '[]');
+  let settingsOpen = false;
 
   const renderCounts = new Map();
   let totalRenders = 0;
@@ -439,6 +441,61 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     renderPanel();
     saveCalculatedTree();
   }
+
+  let lastAnalyzedRoute = window.location.pathname;
+  
+  async function refreshAnalysis() {
+    isLoading = true;
+    renderPanel();
+    
+    try {
+      const res = await fetch('/__overlay_data.json?route=' + encodeURIComponent(window.location.pathname));
+      const data = await res.json();
+      
+      if (data.componentTree) {
+        STATIC_TREE.length = 0;
+        STATIC_TREE.push(...data.componentTree);
+        
+        staticComponentMap.clear();
+        buildStaticComponentMap(STATIC_TREE);
+      }
+      
+      if (data.stats) {
+        STATS = data.stats;
+      }
+      
+      ROUTE = window.location.pathname;
+      lastAnalyzedRoute = ROUTE;
+      
+      refreshFiberTree();
+    } catch (err) {
+      console.warn('[Overlay] Failed to refresh analysis:', err);
+    }
+    
+    isLoading = false;
+    renderPanel();
+  }
+
+  function checkForRouteChange() {
+    const currentRoute = window.location.pathname;
+    if (currentRoute !== lastAnalyzedRoute) {
+      refreshAnalysis();
+    }
+  }
+
+  window.addEventListener('popstate', checkForRouteChange);
+  
+  const origPushState = history.pushState;
+  history.pushState = function(...args) {
+    origPushState.apply(this, args);
+    setTimeout(checkForRouteChange, 50);
+  };
+  
+  const origReplaceState = history.replaceState;
+  history.replaceState = function(...args) {
+    origReplaceState.apply(this, args);
+    setTimeout(checkForRouteChange, 50);
+  };
   
   let lastSavedTreeHash = '';
   function saveCalculatedTree() {
@@ -738,6 +795,30 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return false;
   }
 
+  function isPathIgnored(filePath) {
+    if (!filePath || ignoredPaths.length === 0) return false;
+    const normalizedPath = filePath.toLowerCase();
+    for (const pattern of ignoredPaths) {
+      if (!pattern.trim()) continue;
+      const normalizedPattern = pattern.toLowerCase().trim();
+      if (normalizedPath.includes(normalizedPattern)) return true;
+    }
+    return false;
+  }
+
+  function filterIgnoredNodes(nodes) {
+    const result = [];
+    for (const node of nodes) {
+      const filePath = node.source?.fileName || node.file || node.component?.filePath || '';
+      if (isPathIgnored(filePath)) continue;
+      result.push({
+        ...node,
+        children: filterIgnoredNodes(node.children || [])
+      });
+    }
+    return result;
+  }
+
   function getParentName(nodeId) {
     const parts = nodeId.split('-').map(Number);
     if (parts.length < 2) return null;
@@ -921,6 +1002,9 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       const hooksCount = staticComp?.hooks?.length || 0;
       const hooksHtml = hooksCount > 0 ? '<span class="hooks" title="' + staticComp.hooks.join(', ') + '">⚡' + hooksCount + '</span>' : '';
       
+      const propsCount = staticComp?.props?.length || 0;
+      const propsHtml = propsCount > 0 ? '<span class="props-count" title="' + staticComp.props.map(p => p.name + (p.optional ? '?' : '')).join(', ') + '">📌' + propsCount + '</span>' : '';
+      
       const dataFlow = staticComp?.childDataFlow || [];
       const serverDataPassed = dataFlow.flatMap(f => 
         Object.entries(f.props)
@@ -945,6 +1029,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
             <span class="toggle">\${hasChildren ? '▼' : '•'}</span>
             <span class="name">\${name}</span>
             \${badgesHtml}
+            \${propsHtml}
             \${hooksHtml}
             \${dataFlowHtml}
             <span class="info-btn" title="View details">ℹ</span>
@@ -958,13 +1043,15 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   function renderPanel() {
+    const filteredTree = filterIgnoredNodes(TREE);
     const treeContent = isLoading 
       ? '<div class="loading"><div class="loading-spinner"></div><div class="loading-text">Analyzing components...</div></div>'
-      : TREE.length === 0
+      : filteredTree.length === 0
         ? '<div class="loading"><div class="loading-text">No components found</div></div>'
-        : renderTree(TREE);
+        : renderTree(filteredTree);
 
     const filterLabel = filterEnabled ? 'FILTERED' : 'ALL';
+    const ignoredCount = ignoredPaths.filter(p => p.trim()).length;
 
     container.innerHTML = \`
       <div class="panel \${isOpen ? 'open' : ''}">
@@ -973,7 +1060,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
           <div class="header-row">
             <h2>🧩 Component Overlay</h2>
             <div class="header-buttons">
-              <button class="refresh-btn" title="Refresh fiber tree">↻</button>
+              <button class="settings-btn" title="Settings - ignore paths">\${ignoredCount > 0 ? '⚙️' + ignoredCount : '⚙️'}</button>
+              <button class="refresh-btn" title="Re-analyze page">🔄</button>
               <button class="filter-btn \${filterEnabled ? 'on' : 'off'}" title="Toggle filter (show only project components)">\${filterLabel}</button>
               <button class="pause-btn \${isPaused ? 'paused' : ''}">\${isPaused ? '▶' : '⏸'}</button>
             </div>
@@ -1009,12 +1097,18 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     const pauseBtn = shadow.querySelector('.pause-btn');
     const refreshBtn = shadow.querySelector('.refresh-btn');
     const filterBtn = shadow.querySelector('.filter-btn');
+    const settingsBtn = shadow.querySelector('.settings-btn');
 
     toggleBtn.addEventListener('click', e => { e.stopPropagation(); e.stopImmediatePropagation(); toggle(); }, { capture: true });
 
+    settingsBtn?.addEventListener('click', e => {
+      e.stopPropagation(); e.stopImmediatePropagation();
+      showSettingsDialog();
+    }, { capture: true });
+
     refreshBtn?.addEventListener('click', e => {
       e.stopPropagation(); e.stopImmediatePropagation();
-      refreshFiberTree();
+      refreshAnalysis();
     }, { capture: true });
 
     filterBtn?.addEventListener('click', e => {
@@ -1231,6 +1325,99 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         }
       }, { capture: true });
     });
+  }
+
+  let settingsOverlay = null;
+
+  function showSettingsDialog() {
+    if (!settingsOverlay) {
+      settingsOverlay = document.createElement('div');
+      settingsOverlay.className = 'settings-overlay';
+      settingsOverlay.style.display = 'none';
+      shadow.appendChild(settingsOverlay);
+
+      settingsOverlay.addEventListener('click', e => {
+        const target = e.target;
+        
+        if (target === settingsOverlay) {
+          hideSettingsDialog();
+          return;
+        }
+        
+        if (target.closest('.settings-close')) {
+          hideSettingsDialog();
+          return;
+        }
+        
+        if (target.closest('.settings-save')) {
+          const textarea = settingsOverlay.querySelector('.ignored-paths-input');
+          if (textarea) {
+            const paths = textarea.value.split('\\n').map(p => p.trim()).filter(p => p);
+            ignoredPaths = paths;
+            localStorage.setItem('ro-ignored-paths', JSON.stringify(paths));
+            console.log('[Overlay] Saved ignored paths:', paths);
+          }
+          hideSettingsDialog();
+          renderPanel();
+          return;
+        }
+        
+        if (target.closest('.settings-clear')) {
+          const textarea = settingsOverlay.querySelector('.ignored-paths-input');
+          if (textarea) textarea.value = '';
+          return;
+        }
+        
+        const presetBtn = target.closest('.settings-preset');
+        if (presetBtn) {
+          const textarea = settingsOverlay.querySelector('.ignored-paths-input');
+          if (textarea) {
+            const currentValue = textarea.value.trim();
+            const newPath = presetBtn.dataset.paths;
+            if (currentValue && !currentValue.includes(newPath)) {
+              textarea.value = currentValue + '\\n' + newPath;
+            } else if (!currentValue) {
+              textarea.value = newPath;
+            }
+          }
+          return;
+        }
+      });
+    }
+
+    const currentPaths = ignoredPaths.join('\\n');
+    
+    settingsOverlay.innerHTML = \`
+      <div class="settings-dialog">
+        <div class="settings-header">
+          <h3>⚙️ Settings</h3>
+          <button class="settings-close">×</button>
+        </div>
+        <div class="settings-content">
+          <div class="settings-section">
+            <label>Ignored Paths</label>
+            <p class="settings-hint">Components with file paths containing these strings will be hidden from the tree. One per line.</p>
+            <textarea class="ignored-paths-input" placeholder="components/ui&#10;shadcn-ui&#10;@radix-ui">\${currentPaths}</textarea>
+          </div>
+          <div class="settings-examples">
+            <span class="settings-example-label">Examples:</span>
+            <button class="settings-preset" data-paths="components/ui">shadcn/ui</button>
+            <button class="settings-preset" data-paths="@radix-ui">radix-ui</button>
+            <button class="settings-preset" data-paths="node_modules">node_modules</button>
+          </div>
+        </div>
+        <div class="settings-footer">
+          <button class="settings-clear">Clear All</button>
+          <button class="settings-save">Save</button>
+        </div>
+      </div>
+    \`;
+
+    settingsOverlay.style.display = 'flex';
+  }
+
+  function hideSettingsDialog() {
+    if (settingsOverlay) settingsOverlay.style.display = 'none';
   }
 
   function showDetailDialog(node, domEl) {
@@ -2080,6 +2267,11 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   }
 
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && settingsOverlay?.style.display === 'flex') {
+      e.preventDefault(); e.stopPropagation();
+      hideSettingsDialog();
+      return;
+    }
     if (e.key === 'Escape' && detailOverlay?.style.display === 'flex') {
       e.preventDefault(); e.stopPropagation();
       hideDetailDialog();
@@ -2211,7 +2403,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     show: () => { if (!isOpen) toggle(); },
     hide: () => { if (isOpen) toggle(); },
     setWidth: w => { panelWidth = w; shadow.querySelector(':host').style.setProperty('--panel-width', w + 'px'); localStorage.setItem('ro-panel-width', w.toString()); },
-    refresh: refreshFiberTree,
+    refresh: refreshAnalysis,
+    refreshFiber: refreshFiberTree,
     toggleFilter: () => { filterEnabled = !filterEnabled; refreshFiberTree(); },
     getTree: () => TREE,
     getFiberTree: () => FIBER_TREE,

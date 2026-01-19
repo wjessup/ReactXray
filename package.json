@@ -16,6 +16,7 @@
     "overlay": "tsx src/cli.ts overlay",
     "visualize": "tsx src/visualize.ts",
     "serve": "tsx src/cli.ts serve",
+    "serve:watch": "tsx watch src/cli.ts serve",
     "debug": "tsx src/cli.ts debug",
     "verify": "tsx src/verify-tree.ts"
   },

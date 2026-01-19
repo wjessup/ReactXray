@@ -225,6 +225,12 @@ export const OVERLAY_CSS = `
     white-space: nowrap;
   }
 
+  .props-count {
+    color: #d2a8ff;
+    font-size: 9px;
+    cursor: help;
+  }
+
   .data-flow {
     color: #7ee787;
     font-size: 9px;
@@ -333,6 +339,165 @@ export const OVERLAY_CSS = `
   }
 
   .detail-close:hover { color: #c9d1d9; }
+
+  .settings-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 2147483647;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(2px);
+  }
+
+  .settings-dialog {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    width: 420px;
+    max-width: 90vw;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  }
+
+  .settings-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .settings-header h3 { color: #c9d1d9; margin: 0; font-size: 15px; font-weight: 600; }
+
+  .settings-close {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+  .settings-close:hover { color: #c9d1d9; }
+
+  .settings-content {
+    padding: 16px 20px;
+  }
+
+  .settings-section label {
+    display: block;
+    color: #c9d1d9;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+
+  .settings-hint {
+    color: #8b949e;
+    font-size: 11px;
+    margin: 0 0 10px 0;
+    line-height: 1.4;
+  }
+
+  .ignored-paths-input {
+    width: 100%;
+    min-height: 100px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #c9d1d9;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    padding: 10px;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+  .ignored-paths-input:focus {
+    outline: none;
+    border-color: #58a6ff;
+  }
+  .ignored-paths-input::placeholder {
+    color: #484f58;
+  }
+
+  .settings-examples {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+
+  .settings-example-label {
+    color: #8b949e;
+    font-size: 11px;
+  }
+
+  .settings-preset {
+    background: #21262d;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    color: #8b949e;
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .settings-preset:hover {
+    background: #30363d;
+    color: #c9d1d9;
+  }
+
+  .settings-footer {
+    padding: 12px 20px;
+    border-top: 1px solid #30363d;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .settings-clear {
+    background: none;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    color: #8b949e;
+    font-size: 12px;
+    padding: 8px 16px;
+    cursor: pointer;
+  }
+  .settings-clear:hover {
+    border-color: #f85149;
+    color: #f85149;
+  }
+
+  .settings-save {
+    background: #238636;
+    border: none;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 8px 20px;
+    cursor: pointer;
+  }
+  .settings-save:hover {
+    background: #2ea043;
+  }
+
+  .settings-btn {
+    background: none;
+    border: none;
+    color: #8b949e;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .settings-btn:hover { color: #c9d1d9; }
 
   .detail-tabs {
     display: flex;

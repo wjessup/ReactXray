@@ -7,9 +7,18 @@ import {
 import { request as httpsRequest } from "https";
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 import { analyzeRoute, getProjectComponentNames } from "./analyze/index.js";
-import { generateOverlayScript } from "./overlay/index.js";
-import type { ComponentTreeNode } from "./types.js";
+import type { ComponentTreeNode, RouteAnalysis } from "./types.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+async function getOverlayGenerator(): Promise<(data: RouteAnalysis) => string> {
+  const cacheBuster = Date.now();
+  const modulePath = path.resolve(__dirname, "./overlay/index.js");
+  const module = await import(`${modulePath}?cb=${cacheBuster}`);
+  return module.generateOverlayScript;
+}
 
 function countTreeNodes(nodes: ComponentTreeNode[]): number {
   let count = nodes.length;
@@ -30,8 +39,8 @@ interface ServerOptions {
 export function startServer(options: ServerOptions): void {
   const { port, outputPath, proxyTarget, projectPath, staticOverlay } = options;
 
-  const overlayCache = new Map<string, { script: string; time: number }>();
-  const CACHE_TTL = 5000;
+  const analysisCache = new Map<string, { result: RouteAnalysis; time: number }>();
+  const CACHE_TTL = 10000;
 
   let componentAllowlistCache: { names: string[]; time: number } | null = null;
   const ALLOWLIST_CACHE_TTL = 30000;
@@ -61,25 +70,36 @@ export function startServer(options: ServerOptions): void {
   async function getOverlayForRoute(route: string): Promise<string | null> {
     if (!projectPath) return null;
 
-    const cached = overlayCache.get(route);
-    if (cached && Date.now() - cached.time < CACHE_TTL) return cached.script;
+    let result: RouteAnalysis;
+    const cached = analysisCache.get(route);
+    
+    if (cached && Date.now() - cached.time < CACHE_TTL) {
+      result = cached.result;
+      console.log(`  Using cached analysis for: ${route}`);
+    } else {
+      try {
+        console.log(`  Analyzing route: ${route}`);
+        result = await analyzeRoute(projectPath, route);
+        analysisCache.set(route, { result, time: Date.now() });
+        console.log(
+          `  ✓ Analyzed (${
+            result.stats.totalComponents
+          } components, ${countTreeNodes(result.componentTree)} tree nodes)`
+        );
+      } catch (err) {
+        console.error(
+          `  ✗ Failed to analyze route ${route}:`,
+          (err as Error).message
+        );
+        return null;
+      }
+    }
 
     try {
-      console.log(`  Analyzing route: ${route}`);
-      const result = await analyzeRoute(projectPath, route);
-      const script = generateOverlayScript(result);
-      overlayCache.set(route, { script, time: Date.now() });
-      console.log(
-        `  ✓ Generated overlay (${
-          result.stats.totalComponents
-        } components, ${countTreeNodes(result.componentTree)} tree nodes)`
-      );
-      return script;
+      const generateOverlayScript = await getOverlayGenerator();
+      return generateOverlayScript(result);
     } catch (err) {
-      console.error(
-        `  ✗ Failed to analyze route ${route}:`,
-        (err as Error).message
-      );
+      console.error(`  ✗ Failed to generate overlay:`, (err as Error).message);
       return null;
     }
   }
