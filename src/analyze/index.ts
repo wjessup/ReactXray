@@ -2,12 +2,10 @@ import { Project, SourceFile, Node } from "ts-morph";
 import { glob } from "glob";
 import path from "path";
 import fs from "fs/promises";
-import madge from "madge";
 import type {
   RouteAnalysis,
   ComponentTreeNode,
   ComponentInfo,
-  DependencyAnalysis,
   FileTreeAnalysis,
   FileNode,
   ApiRouteAnalysis,
@@ -574,45 +572,6 @@ function buildComponentTree(
     result.push(buildNode(entryFiles.notFound, null, rootPath));
 
   return result;
-}
-
-export async function analyzeDependencies(
-  targetPath: string
-): Promise<DependencyAnalysis> {
-  const tsConfigPath = path.join(targetPath, "tsconfig.json");
-  const hasTsConfig = await fileExists(tsConfigPath);
-
-  const result = await madge(targetPath, {
-    fileExtensions: ["ts", "tsx", "js", "jsx"],
-    excludeRegExp: [
-      /node_modules/,
-      /\.test\./,
-      /\.spec\./,
-      /dist/,
-      /build/,
-      /\.next/,
-    ],
-    ...(hasTsConfig && { tsConfig: tsConfigPath }),
-  });
-
-  const graphObj = result.obj();
-  const graph = Object.entries(graphObj).map(([file, imports]) => ({
-    file,
-    imports: imports as string[],
-  }));
-
-  return {
-    graph,
-    circular: result.circular(),
-    orphans: result.orphans(),
-    warnings: Object.values(result.warnings()).flat() as string[],
-    stats: {
-      totalFiles: graph.length,
-      totalImports: graph.reduce((sum, n) => sum + n.imports.length, 0),
-      circularCount: result.circular().length,
-      orphanCount: result.orphans().length,
-    },
-  };
 }
 
 export async function analyzeFileTree(

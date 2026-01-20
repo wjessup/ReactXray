@@ -111,6 +111,225 @@ interface ComponentInfo {
 - No runtime values
 - Guesses at JSX structure from static analysis
 
+#### Static Analysis Challenges & Solutions
+
+Building an accurate component tree from static analysis is hard. Here are the problems we hit and how we solved them:
+
+**Problem 1: Flat Children List**
+
+Naive approach: scan for all `<Component>` tags in a file, add them as direct children.
+
+```tsx
+// layout.tsx
+return (
+  <Provider>
+    <Header />
+    <main>{children}</main>
+    <Footer />
+  </Provider>
+)
+```
+
+Wrong result: `[Provider, Header, main, Footer]` all as siblings.
+Correct result: `Provider` has children `[Header, main, Footer]`.
+
+**Solution**: `extractJsxUsage()` tracks parent-child relationships using `nestedInComponent`:
+
+```typescript
+interface JsxUsage {
+  directChildren: string[];                    // Top-level JSX
+  nestedInComponent: Map<string, string[]>;    // Parent → children nested inside
+  identifiersInComponent: Map<string, string[]>;
+}
+```
+
+The `processJsxTree()` function walks JSX recursively, tracking the current parent component name and building the nesting map.
+
+**Problem 2: Non-Project Components Hide Project Components**
+
+```tsx
+// layout.tsx
+return (
+  <ThemeProvider>           // ← Library component (not in your codebase)
+    <div className="layout"> // ← HTML element
+      <Header />            // ← YOUR component - would be missed!
+      <Sidebar />           // ← YOUR component - would be missed!
+    </div>
+  </ThemeProvider>
+)
+```
+
+If we only track "direct children" of project components, `Header` and `Sidebar` get lost inside non-project parents (library components, HTML elements, third-party components).
+
+**Solution**: `getAllProjectComponentsFromFile()` in `index.ts` extracts project components from ALL nesting levels:
+
+```typescript
+for (const [parentName, nested] of jsxUsage.nestedInComponent) {
+  if (!nameToFileMap.has(parentName)) {  // Parent is NOT a project component
+    for (const name of nested) {
+      if (nameToFileMap.has(name) && !hasProjectAncestor(name)) {
+        allComponents.add(name);  // Promote to direct child
+      }
+    }
+  }
+}
+```
+
+This "promotes" project components nested inside non-project parents up to direct children. Note: HTML elements like `div` are treated as transparent - we don't track their structure, only the project components within them.
+
+**Problem 3: Conditional Rendering**
+
+```tsx
+return (
+  <div>
+    {isLoggedIn && <UserMenu />}
+    {showBanner ? <Banner /> : <Placeholder />}
+  </div>
+)
+```
+
+Components inside `&&` or ternaries would be missed.
+
+**Solution**: `processJsxTree()` handles expression types:
+
+```typescript
+} else if (Node.isConditionalExpression(node)) {
+  processJsxTree(node.getWhenTrue(), parentName);   // Banner
+  processJsxTree(node.getWhenFalse(), parentName);  // Placeholder
+} else if (Node.isBinaryExpression(node)) {
+  processJsxTree(node.getRight(), parentName);      // UserMenu (after &&)
+}
+```
+
+**Problem 4: Components Passed as Props**
+
+```tsx
+<Layout 
+  sidebar={<Sidebar />}      // JSX as prop
+  header={<Header />}        // JSX as prop
+>
+  <MainContent />
+</Layout>
+```
+
+`Sidebar` and `Header` aren't children of `Layout` in the JSX tree - they're attributes.
+
+**Solution**: Walk JSX attributes too:
+
+```typescript
+const attributes = Node.isJsxElement(node)
+  ? node.getOpeningElement().getAttributes()
+  : node.getAttributes();
+
+for (const attr of attributes) {
+  if (Node.isJsxAttribute(attr)) {
+    const init = attr.getInitializer();
+    if (init) {
+      processJsxTree(init, tagName);  // Recurse into attribute value
+    }
+  }
+}
+```
+
+**Problem 5: Dynamic Components from Hooks/Functions**
+
+```tsx
+// useFilterSections.ts
+const FILTER_COMPONENTS = {
+  text: { Component: TextFilterSection },
+  color: { Component: ColorFilterSection },
+};
+
+export function useFilterSections(view: string) {
+  return ["text", "color"].map((key) => {
+    const { Component } = FILTER_COMPONENTS[key];
+    return { content: <Component />, title: key };
+  });
+}
+
+// SearchPage.tsx
+const sections = useFilterSections("grid");
+return sections.map(s => <FilterPanel>{s.content}</FilterPanel>);
+```
+
+Static analysis sees `<Component />` - a dynamic variable. How do we know it's actually `TextFilterSection` and `ColorFilterSection`?
+
+**Solution**: Generic pattern detection in `extractJsxExports()` (in `ast.ts`):
+
+**Step 1: Scan const objects for component references**
+
+```typescript
+// Walk all variable declarations in the file
+sourceFile.forEachDescendant((node) => {
+  if (Node.isVariableDeclaration(node)) {
+    collectComponentRefs(init, null);  // Scan FILTER_COMPONENTS
+  }
+});
+```
+
+This builds a map of property names to component names:
+```javascript
+componentsByPropertyName = {
+  "Component": Set(["TextFilterSection", "ColorFilterSection"])
+}
+```
+
+**Step 2: Detect `.map()` / `.flatMap()` patterns returning objects**
+
+```typescript
+if (methodName === "map" || methodName === "filter" || methodName === "flatMap") {
+  const body = callback.getBody();
+  if (Node.isObjectLiteralExpression(body)) {
+    // Extract JSX from { content: <Component /> }
+    const objJsx = extractJsxFromObjectLiteral(body);
+    for (const [key, jsx] of objJsx) {
+      propsJsx.set(key, jsx);  // "content" → ["Component"]
+    }
+  }
+}
+```
+
+**Step 3: Resolve dynamic names back to actual components**
+
+```typescript
+function resolveComponentName(name: string): string[] {
+  const resolved = componentsByPropertyName.get(name);
+  if (resolved) return Array.from(resolved);  // "Component" → ["TextFilterSection", "ColorFilterSection"]
+  return [name];
+}
+```
+
+**Result**: For `useFilterSections`, we extract:
+```typescript
+{
+  exportName: "useFilterSections",
+  jsxInProperties: Map {
+    "content" → ["TextFilterSection", "ColorFilterSection"]
+  }
+}
+```
+
+**Step 4: Connect to consuming files**
+
+When `SearchPage` imports and calls `useFilterSections()`:
+1. `resolveJsxImports()` tracks the import
+2. `extractInferredJsx()` sees the hook call and looks up its export data
+3. `inferredInComponent` map connects `SearchPage` → `[TextFilterSection, ColorFilterSection]`
+
+```typescript
+interface EnhancedJsxUsage extends JsxUsage {
+  inferredInComponent: Map<string, string[]>;  // Parent → dynamically computed children
+}
+```
+
+**This is fully generic** - works for any:
+- Hook returning objects with JSX (`useModal`, `usePanel`, `useNavigation`)
+- Function returning arrays of config objects
+- Const objects mapping keys to components
+- `.map()` / `.flatMap()` / `.filter()` patterns
+
+It's fuzzy (can't know runtime values) but catches common config-driven UI patterns.
+
 ### Source 2: React Fiber Tree
 
 Captures the live React fiber tree from `window.__REACT_DEVTOOLS_GLOBAL_HOOK__`:
@@ -251,6 +470,155 @@ function mergeStaticWithFiber(staticNodes, fiberLookup, usedFibers = new Set()) 
 3. **Static children preserved** - Unlike earlier designs, we DON'T replace children with fiber's children at bridge points. The static tree structure is authoritative; fiber references are attached for runtime data extraction (props, state, hooks).
 
 4. **`{children}` slots** - Next.js injects page content via `{children}`. These are marked with `isSlot: true` for special rendering.
+
+### Concrete Data Structure Examples
+
+**1. Static Tree Node (from AST analysis at build time)**
+
+The static tree is built by `buildComponentTree()` in `src/analyze/index.ts`. It walks source files and extracts JSX usage:
+
+```typescript
+interface ComponentTreeNode {
+  file: string;              // "src/app/layout.tsx" or "{children}"
+  component: ComponentInfo | null;
+  children: ComponentTreeNode[];
+}
+
+interface ComponentInfo {
+  name: string;              // "RootLayout"
+  filePath: string;          // "src/app/layout.tsx"
+  isClientComponent: boolean;
+  isServerComponent: boolean;
+  hooks: string[];           // ["useState", "useEffect"] - from AST
+  props: PropInfo[];         // TypeScript prop types
+  nextjsFileType: 'page' | 'layout' | 'loading' | 'error' | null;
+}
+```
+
+Example static tree (simplified):
+```json
+[{
+  "file": "src/app/layout.tsx",
+  "component": { "name": "RootLayout", "isServerComponent": true, "hooks": [] },
+  "children": [
+    {
+      "file": "src/components/Header.tsx",
+      "component": { "name": "Header", "isClientComponent": true, "hooks": ["useState"] },
+      "children": []
+    },
+    {
+      "file": "{children}",
+      "component": null,
+      "children": [
+        {
+          "file": "src/app/search/page.tsx",
+          "component": { "name": "SearchPage", "isClientComponent": true },
+          "children": [...]
+        }
+      ]
+    }
+  ]
+}]
+```
+
+**2. Fiber Tree Node (captured from React at runtime)**
+
+The fiber tree is captured by walking `window.__REACT_DEVTOOLS_GLOBAL_HOOK__`:
+
+```typescript
+interface FiberTreeNode {
+  name: string;              // "Header"
+  fiber: ReactFiber;         // Actual React fiber reference
+  source: { fileName: string; lineNumber: number } | null;
+  children: FiberTreeNode[];
+}
+```
+
+Example fiber tree (simplified):
+```json
+[{
+  "name": "Header",
+  "source": { "fileName": "/src/components/Header.tsx", "lineNumber": 5 },
+  "children": [
+    { "name": "SearchInput", "source": {...}, "children": [...] },
+    { "name": "UserMenu", "source": {...}, "children": [...] }
+  ]
+}]
+```
+
+**Key difference**: The static tree includes server components (`RootLayout`), but the fiber tree does NOT - React fibers only exist for client-side components.
+
+**3. Fiber Lookup (flattened index)**
+
+Before merging, we flatten the fiber tree into a name-indexed Map:
+
+```javascript
+// Map<string, FiberTreeNode[]>
+{
+  "Header": [{ name: "Header", fiber: {...}, source: {...} }],
+  "SearchInput": [{ name: "SearchInput", fiber: {...}, source: {...} }],
+  "Button": [
+    { name: "Button", fiber: {...} },  // Multiple instances!
+    { name: "Button", fiber: {...} }
+  ]
+}
+```
+
+**4. Merged Tree Node (final output)**
+
+After merging, each node has both static metadata AND fiber reference (if available):
+
+```typescript
+interface MergedNode {
+  file: string;
+  component: ComponentInfo | null;
+  source: { fileName: string; lineNumber?: number } | null;
+  fiber: ReactFiber | null;     // Attached from fiber lookup
+  children: MergedNode[];
+  isBridge?: boolean;           // Client component with fiber
+  isServerOnly?: boolean;       // Server component (no fiber exists)
+  hasFiber?: boolean;
+  isSlot?: boolean;             // {children} slot
+}
+```
+
+### Yes, We Really Just Walk the Static Tree
+
+The merge is conceptually simple:
+
+```
+STATIC TREE (authoritative structure)     FIBER LOOKUP (runtime data)
+         │                                         │
+         └──────────────┬──────────────────────────┘
+                        │
+                        ▼
+                   MERGED TREE
+            (static structure + fiber refs)
+```
+
+We **do not** try to reconcile two tree structures. The static tree IS the structure. We just:
+1. Walk each static node
+2. Look up matching fiber by component name
+3. Attach the fiber reference (for extracting live props/state/hooks)
+4. Keep recursing through static children
+
+The fiber tree's own structure is ignored for display purposes - we only use it as a lookup table to attach live data.
+
+**Step-by-step merge walk:**
+
+```
+Static Tree:                        Fiber Lookup:                    Result:
+                                    ┌─────────────────────────┐
+┌─ RootLayout (server) ─────────────│ "Header" → [fiber1]     │──► RootLayout { fiber: null, isServerOnly: true }
+│                                   │ "SearchPage" → [fiber2] │     │
+├─ Header (client) ─────────────────│ "Button" → [f3, f4]     │──► ├─ Header { fiber: fiber1, isBridge: true }
+│                                   └─────────────────────────┘     │
+├─ {children}                                                       ├─ {children} { isSlot: true }
+│   └─ SearchPage (client) ─────────────────────────────────────────│   └─ SearchPage { fiber: fiber2, isBridge: true }
+│       └─ Button (client) ─────────────────────────────────────────│       └─ Button { fiber: f3 }  (f3 marked used)
+│                                                                   │
+└─ Footer (server) ──────────────────────────────────────────────► └─ Footer { fiber: null, isServerOnly: true }
+```
 
 ### Fiber Lookup Building
 

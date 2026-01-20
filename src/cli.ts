@@ -5,7 +5,6 @@ import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import {
   analyzeRoute,
-  analyzeDependencies,
   analyzeFileTree,
   analyzeApiRoutes,
   analyzeProject,
@@ -30,7 +29,7 @@ program
   .description("Analyze a target project directory")
   .argument("<target>", "Path to the project to analyze")
   .option("-o, --out <dir>", "Output directory for artifacts", defaultOutput)
-  .option("--only <analyzers>", "Run only specific analyzers (comma-separated: deps,tree,components,routes)")
+  .option("--only <analyzers>", "Run only specific analyzers (comma-separated: tree,components,routes)")
   .action(async (target: string, options: { out: string; only?: string }) => {
     const targetPath = path.resolve(target);
     const outputPath = path.resolve(options.out);
@@ -42,20 +41,13 @@ program
 
     await fs.mkdir(outputPath, { recursive: true });
 
-    const analyzers = options.only?.split(",") ?? ["deps", "tree", "components", "routes"];
+    const analyzers = options.only?.split(",") ?? ["tree", "components", "routes"];
 
     console.log(`\nAnalyzing: ${targetPath}`);
     console.log(`Output to: ${outputPath}\n`);
 
     for (const analyzer of analyzers) {
       switch (analyzer.trim()) {
-        case "deps":
-          console.log("Running dependency analysis...");
-          const deps = await analyzeDependencies(targetPath);
-          await fs.writeFile(path.join(outputPath, "dependencies.json"), JSON.stringify(deps, null, 2));
-          console.log("  ✓ dependencies.json");
-          break;
-
         case "tree":
           console.log("Running file tree analysis...");
           const tree = await analyzeFileTree(targetPath);

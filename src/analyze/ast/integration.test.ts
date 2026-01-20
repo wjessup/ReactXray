@@ -1,11 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { Project } from "ts-morph";
-import {
-  extractJsxExports,
-  extractJsxUsage,
-  extractInferredJsx,
-} from "./ast.js";
-import type { ResolvedJsxImport, JsxExport } from "../types.js";
+import { extractJsxExports } from "./jsx-exports.js";
+import { extractJsxUsage } from "./jsx-usage.js";
+import { extractInferredJsx } from "./inferred-jsx.js";
+import type { ResolvedJsxImport } from "../../types.js";
 
 function parseJsx(code: string) {
   const project = new Project({

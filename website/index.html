@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>xray — full React tree for Next.js</title>
+    <meta
+      name="description"
+      content="xray reveals the full React component tree for Next.js (server + client) with a live overlay, data-flow tracing, and AI-friendly JSON exports."
+    />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg">
+      <canvas id="bg3" aria-hidden="true"></canvas>
+      <div class="bgGlow" aria-hidden="true"></div>
+    </div>
+
+    <header class="top">
+      <div class="wrap nav">
+        <a class="brand" href="./">
+          <span class="brandMark" aria-hidden="true"></span>
+          <span class="brandText">xray</span>
+        </a>
+        <nav class="links" aria-label="Primary">
+          <a href="#features">Features</a>
+          <a href="#how">How it works</a>
+          <a href="#use">Use</a>
+        </nav>
+        <div class="ctaRow">
+          <a class="btn ghost" href="#use">Get started</a>
+          <a class="btn" href="https://github.com/" target="_blank" rel="noreferrer">GitHub</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="wrap heroGrid">
+          <div class="heroCopy">
+            <p class="kicker">Next.js App Router + React Server Components</p>
+            <h1>
+              The component tree
+              <span class="accent">React DevTools can’t show</span>
+            </h1>
+            <p class="sub">
+              xray overlays your running app with the <strong>complete</strong> React tree—server + client—then traces
+              props and data flow so you can understand (and ship) faster.
+            </p>
+            <div class="heroBtns">
+              <a class="btn" href="#use">Run the overlay</a>
+              <a class="btn ghost" href="#features">See what you get</a>
+            </div>
+            <div class="meta">
+              <span class="pill">Live overlay</span>
+              <span class="pill">RSC-aware</span>
+              <span class="pill">Data-flow tracing</span>
+              <span class="pill">AI-friendly JSON</span>
+            </div>
+          </div>
+
+          <div class="heroCard" role="presentation">
+            <div class="cardTop">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+              <span class="cardTitle">xray overlay</span>
+            </div>
+            <div class="cardBody">
+              <div class="tree">
+                <div class="node"><span class="badge server">SERVER</span> <span class="name">RootLayout</span></div>
+                <div class="branch">
+                  <div class="node"><span class="badge server">SERVER</span> <span class="name">StandardLayout</span></div>
+                  <div class="branch">
+                    <div class="node">
+                      <span class="badge client">'use client'</span> <span class="name">SearchPage</span>
+                      <span class="hint">props → state → hooks</span>
+                    </div>
+                    <div class="branch">
+                      <div class="node">
+                        <span class="badge client2">↳ client</span> <span class="name">FilterPanel</span>
+                      </div>
+                      <div class="node">
+                        <span class="badge server2">SERVER</span> <span class="name">Results</span>
+                        <span class="hint">fetch → props</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="miniLegend">
+                <span><span class="key server"></span> server component</span>
+                <span><span class="key client"></span> client component</span>
+                <span><span class="key client2"></span> inherited client</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="wrap">
+          <h2>Why xray feels different</h2>
+          <p class="lead">
+            It merges <strong>static AST analysis</strong> with <strong>runtime fiber inspection</strong> so you can see the
+            tree you actually care about: what renders, where it comes from, and where boundaries are.
+          </p>
+          <div class="grid3">
+            <div class="card">
+              <h3>Full tree (server + client)</h3>
+              <p>Server components and layouts are visible, not “missing”.</p>
+            </div>
+            <div class="card">
+              <h3>Click-to-highlight</h3>
+              <p>Select a node, highlight it on the page, cycle through instances.</p>
+            </div>
+            <div class="card">
+              <h3>Data-flow tracing</h3>
+              <p>Track where props originate: literals, computed values, or server queries.</p>
+            </div>
+            <div class="card">
+              <h3>Client boundary clarity</h3>
+              <p>Know what’s truly <code>'use client'</code> vs inherited client execution.</p>
+            </div>
+            <div class="card">
+              <h3>Search + ignore rules</h3>
+              <p>Hide library internals and focus on what you own.</p>
+            </div>
+            <div class="card">
+              <h3>AI-ready artifacts</h3>
+              <p>Export synthesized JSON context that models structure and relationships.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="how" class="section">
+        <div class="wrap twoCol">
+          <div>
+            <h2>How it works</h2>
+            <p class="lead">
+              Next.js App Router splits your app across server and client. React DevTools only sees the client fiber tree.
+            </p>
+            <div class="steps">
+              <div class="step">
+                <div class="n">1</div>
+                <div>
+                  <h3>Static analysis</h3>
+                  <p>Parse your source files to build a route tree with props, hooks, and server queries.</p>
+                </div>
+              </div>
+              <div class="step">
+                <div class="n">2</div>
+                <div>
+                  <h3>Runtime inspection</h3>
+                  <p>Read live fiber state/props in the browser for what’s actually rendered right now.</p>
+                </div>
+              </div>
+              <div class="step">
+                <div class="n">3</div>
+                <div>
+                  <h3>Merge at client “bridge” points</h3>
+                  <p>Combine both sources so the server hierarchy and client runtime meet in one tree.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="codeCard">
+            <div class="codeTop">
+              <span class="codeTitle">What you get</span>
+              <span class="codeTag">route-*.json</span>
+            </div>
+            <pre class="code"><code>{
+  "route": "/dashboard/settings",
+  "tree": {
+    "name": "RootLayout",
+    "kind": "server",
+    "children": [
+      { "name": "StandardLayout", "kind": "server" },
+      { "name": "SettingsPage", "kind": "client" }
+    ]
+  },
+  "dataFlow": { "props": "sources + traces" }
+}</code></pre>
+            <p class="codeNote">The exact schema depends on the analyzer output, but the goal stays the same: synthesized, relational context.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="use" class="section">
+        <div class="wrap">
+          <h2>Get started</h2>
+          <div class="grid2">
+            <div class="card">
+              <h3>Install</h3>
+              <pre class="code"><code>pnpm install</code></pre>
+              <p class="muted">Then run the commands below from this repo.</p>
+            </div>
+            <div class="card">
+              <h3>Live overlay proxy</h3>
+              <pre class="code"><code>pnpm serve --proxy http://localhost:3000 --project ~/Code/my-nextjs-app</code></pre>
+              <p class="muted">Open <code>http://localhost:9876</code> instead of your app port.</p>
+            </div>
+            <div class="card">
+              <h3>Route snapshot</h3>
+              <pre class="code"><code>pnpm route ~/Code/my-nextjs-app /dashboard/settings</code></pre>
+              <p class="muted">Generates JSON + a static HTML visualization + an injectable overlay script.</p>
+            </div>
+            <div class="card">
+              <h3>Full repo analysis</h3>
+              <pre class="code"><code>pnpm analyze ~/Code/my-nextjs-app --only deps,components,routes</code></pre>
+              <p class="muted">Outputs artifacts to <code>repo-analysis-output/</code>.</p>
+            </div>
+          </div>
+          <div class="footCta">
+            <div>
+              <h3>Want the README-style details?</h3>
+              <p class="muted">This minisite is the overview. The repo docs go deeper into flags and outputs.</p>
+            </div>
+            <a class="btn ghost" href="https://github.com/" target="_blank" rel="noreferrer">Read docs on GitHub</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footerRow">
+        <span class="muted">xray</span>
+        <span class="muted">Built for Next.js developers</span>
+      </div>
+    </footer>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

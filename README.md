@@ -214,10 +214,6 @@ window.__REPO_OVERLAY__.debug.copyFullDataFlow();  // Copy data flow analysis fo
 
 ## Analyzers
 
-### Dependencies
-
-Uses [Madge](https://github.com/pahen/madge) to map imports/exports and detect circular dependencies.
-
 ### File Tree
 
 Recursive directory walk with metadata (size, extension). Ignores `node_modules`, `.git`, `.next`, `dist`, `build`.

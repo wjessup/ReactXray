@@ -106,24 +106,6 @@ export interface RouteAnalysis {
   };
 }
 
-export interface DependencyNode {
-  file: string;
-  imports: string[];
-}
-
-export interface DependencyAnalysis {
-  graph: DependencyNode[];
-  circular: string[][];
-  orphans: string[];
-  warnings: string[];
-  stats: {
-    totalFiles: number;
-    totalImports: number;
-    circularCount: number;
-    orphanCount: number;
-  };
-}
-
 export interface FileNode {
   name: string;
   path: string;
