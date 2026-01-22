@@ -181,6 +181,7 @@ function startProxyServer(
               componentTree: result.componentTree,
               allComponents: result.allComponents,
               stats: result.stats,
+              architectureAnalysis: result.architectureAnalysis,
             })
           );
           console.log(

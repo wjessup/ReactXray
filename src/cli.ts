@@ -9,6 +9,7 @@ import {
   analyzeApiRoutes,
   analyzeProject,
 } from "./analyze/index.js";
+import type { ComponentTreeNode } from "./types.js";
 import { generateOverlayScript, generateBookmarklet } from "./overlay/index.js";
 import { generateHtml } from "./visualize.js";
 import { startServer } from "./server.js";
@@ -213,6 +214,14 @@ program
     );
     console.log("  ✓ entry-files.json (layouts, page, loading, error, etc.)");
 
+    if (result.architectureAnalysis) {
+      await fs.writeFile(
+        path.join(outputPath, "architecture.json"),
+        JSON.stringify(result.architectureAnalysis, null, 2)
+      );
+      console.log("  ✓ architecture.json (smells, usage, similar components)");
+    }
+
     console.log("\n=== SUMMARY ===");
     console.log(`Route: ${result.route}`);
     console.log(`Total components: ${result.stats.totalComponents}`);
@@ -260,6 +269,70 @@ program
     console.log("  window.__REPO_OVERLAY__.debug.logDataFlow()");
     console.log("  window.__REPO_OVERLAY__.debug.downloadCalculatedTree()");
   });
+
+function collectComponentNamesFromTree(nodes: ComponentTreeNode[]): Set<string> {
+  const names = new Set<string>();
+  const visit = (n: ComponentTreeNode) => {
+    if (n.component?.name) names.add(n.component.name);
+    for (const c of n.children) visit(c);
+  };
+  for (const n of nodes) visit(n);
+  return names;
+}
+
+program
+  .command("component-prop")
+  .description("Print prop flow + upstream sources for one component prop on a route")
+  .argument("<target>", "Path to the Next.js project")
+  .argument("<route>", "Route to analyze (e.g., /dashboard/settings)")
+  .argument("<component>", "Component name (e.g., SpecimenCard)")
+  .argument("<prop>", "Prop name (e.g., data)")
+  .option("--pretty", "Pretty-print JSON")
+  .action(
+    async (
+      target: string,
+      route: string,
+      component: string,
+      prop: string,
+      options: { pretty?: boolean }
+    ) => {
+      const targetPath = path.resolve(target);
+
+      if (!(await pathExists(targetPath))) {
+        console.error(`Error: Target directory does not exist: ${targetPath}`);
+        process.exit(1);
+      }
+
+      const result = await analyzeRoute(targetPath, route);
+      const arch = result.architectureAnalysis;
+
+      const routeComponents = collectComponentNamesFromTree(result.componentTree);
+
+      const flow =
+        arch?.propFlows?.[component]?.find((f) => f.propName === prop) || null;
+
+      const upward =
+        arch?.propUpwardFlows?.[component]?.find((f) => f.propName === prop) ||
+        null;
+
+      const comesFromAll = upward ? upward.usages : [];
+      const comesFromInRoute = comesFromAll.filter((u) =>
+        routeComponents.has(u.parentComponent)
+      );
+
+      const out = {
+        route: result.route,
+        component,
+        prop,
+        whereItFlowsTo: flow?.root || null,
+        whereItComesFrom: comesFromAll,
+        whereItComesFromInRoute: comesFromInRoute,
+      };
+
+      const spacing = options.pretty ? 2 : 0;
+      console.log(JSON.stringify(out, null, spacing));
+    }
+  );
 
 program
   .command("serve")

@@ -5,6 +5,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   const treeJson = JSON.stringify(data.componentTree);
   const statsJson = JSON.stringify(data.stats);
   const routeJson = JSON.stringify(data.route);
+  const archJson = JSON.stringify(data.architectureAnalysis || null);
 
   return `(function() {
   if (window.__REPO_OVERLAY__) {
@@ -18,6 +19,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   let TREE = JSON.parse(JSON.stringify(STATIC_TREE));
   let STATS = ${statsJson};
   let ROUTE = ${routeJson};
+  let ARCHITECTURE = ${archJson};
 
   let panelWidth = parseInt(localStorage.getItem('ro-panel-width') || '380', 10);
   let isOpen = false;
@@ -464,6 +466,10 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         STATS = data.stats;
       }
       
+      if (data.architectureAnalysis) {
+        ARCHITECTURE = data.architectureAnalysis;
+      }
+      
       ROUTE = window.location.pathname;
       lastAnalyzedRoute = ROUTE;
       
@@ -576,7 +582,12 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
     if (didWork) {
       const name = getFiberName(fiber);
-      if (name) trackRender(name);
+      if (name) {
+        const source = extractSourceLocation(fiber);
+        if (isProjectComponent(name, source)) {
+          trackRender(name);
+        }
+      }
     }
 
     if (fiber.child) findChangedFibers(fiber.child, seen);
@@ -958,6 +969,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   let currentDataFlowGraph = null;
   let currentSourceCode = null;
   let sourceLoadingState = 'idle';
+  let selectedProp = null;
   const sourceCache = new Map();
 
   async function fetchSourceCode(filePath) {
@@ -974,6 +986,41 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       console.warn('[Overlay] Failed to fetch source:', err);
       return null;
     }
+  }
+
+  let pendingScrollLine = null;
+
+  async function jumpToSourceLine(filePath, lineNumber) {
+    currentTab = 'source';
+    selectedProp = null;
+    pendingScrollLine = lineNumber;
+    
+    if (!sourceCache.has(filePath)) {
+      sourceLoadingState = 'loading';
+      renderDetailContent();
+      const [_, code] = await Promise.all([loadHighlightJs(), fetchSourceCode(filePath)]);
+      currentSourceCode = code;
+      sourceLoadingState = 'done';
+    } else {
+      currentSourceCode = sourceCache.get(filePath);
+    }
+    
+    renderDetailContent();
+    
+    setTimeout(() => {
+      if (pendingScrollLine && detailOverlay) {
+        const codeEl = detailOverlay.querySelector('.source-code pre code');
+        if (codeEl) {
+          const lineHeight = 18;
+          const scrollTop = (pendingScrollLine - 10) * lineHeight;
+          const container = codeEl.closest('.source-code');
+          if (container) {
+            container.scrollTop = Math.max(0, scrollTop);
+          }
+        }
+        pendingScrollLine = null;
+      }
+    }, 100);
   }
 
   let hljsLoaded = false;
@@ -1231,6 +1278,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     filterBtn?.addEventListener('click', e => {
       e.stopPropagation(); e.stopImmediatePropagation();
       filterEnabled = !filterEnabled;
+      renderCounts.clear();
+      totalRenders = 0;
       refreshFiberTree();
     }, { capture: true });
 
@@ -1564,6 +1613,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
           const newTab = e.target.dataset.tab;
           if (newTab && newTab !== currentTab) {
             currentTab = newTab;
+            selectedProp = null;
             if (newTab === 'source' && !currentSourceCode) {
               const node = currentDetailNode;
               const staticComp = node?.component?.name ? staticComponentMap.get(node.component.name) : null;
@@ -1589,6 +1639,22 @@ export function generateOverlayScript(data: RouteAnalysis): string {
             navigator.clipboard.writeText(currentSourceCode);
             e.target.textContent = '✓ Copied!';
             setTimeout(() => { e.target.textContent = '📋 Copy'; }, 1500);
+          }
+        }
+        const propRow = e.target.closest('.prop-row.has-flow');
+        if (propRow) {
+          const propName = propRow.dataset.prop;
+          if (propName) {
+            selectedProp = selectedProp === propName ? null : propName;
+            renderDetailContent();
+          }
+        }
+        const treeHeader = e.target.closest('.prop-tree-header.clickable');
+        if (treeHeader) {
+          const sourceFile = treeHeader.dataset.sourceFile;
+          const sourceLine = parseInt(treeHeader.dataset.sourceLine, 10);
+          if (sourceFile && sourceLine) {
+            jumpToSourceLine(sourceFile, sourceLine);
           }
         }
         if (e.target.classList.contains('source-open-btn')) {
@@ -1910,6 +1976,323 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       propOrigins
     };
   }
+
+  function getArchSmellsForComponent(compName) {
+    if (!ARCHITECTURE || !ARCHITECTURE.smells) return [];
+    return ARCHITECTURE.smells.filter(s => {
+      if (s.message?.includes(compName)) return true;
+      const fileBasename = s.location?.file?.split('/').pop()?.replace(/\.(tsx?|jsx?)$/, '');
+      if (fileBasename === compName) return true;
+      if (s.details?.similarComponents?.some(sc => sc.name === compName)) return true;
+      return false;
+    });
+  }
+
+  function getArchUsageForComponent(compName) {
+    if (!ARCHITECTURE || !ARCHITECTURE.componentUsages) return null;
+    return ARCHITECTURE.componentUsages.find(u => u.componentName === compName);
+  }
+
+  function getArchSimilarForComponent(compName) {
+    if (!ARCHITECTURE || !ARCHITECTURE.similarComponents) return [];
+    return ARCHITECTURE.similarComponents[compName] || [];
+  }
+
+  function getPropFlow(compName, propName) {
+    if (!ARCHITECTURE || !ARCHITECTURE.propFlows) return null;
+    const flows = ARCHITECTURE.propFlows[compName];
+    if (!flows) return null;
+    return flows.find(f => f.propName === propName);
+  }
+
+  function getPropUpwardFlow(compName, propName) {
+    if (!ARCHITECTURE || !ARCHITECTURE.propUpwardFlows) return null;
+    const flows = ARCHITECTURE.propUpwardFlows[compName];
+    if (!flows) return null;
+    return flows.find(f => f.propName === propName);
+  }
+
+  function countTreeNodes(node) {
+    if (!node) return 0;
+    let count = 1;
+    if (node.children) {
+      for (const child of node.children) {
+        count += countTreeNodes(child);
+      }
+    }
+    return count;
+  }
+
+  function renderPropFlowGraph(flowData, highlightProp, compName) {
+    if (!flowData || !flowData.root) {
+      return '<div class="prop-flow-empty">No flow data</div>';
+    }
+
+    const upwardFlow = getPropUpwardFlow(compName, flowData.propName);
+    let html = '<div class="prop-flow-graph">';
+    
+    if (upwardFlow && upwardFlow.usages && upwardFlow.usages.length > 0) {
+      html += '<div class="prop-upward-section">';
+      html += '<div class="prop-section-label">⬆ WHERE IT COMES FROM</div>';
+      
+      for (const usage of upwardFlow.usages) {
+        html += '<div class="prop-upward-path">';
+        
+        if (usage.upstreamChain && usage.upstreamChain.length > 0) {
+          for (let i = usage.upstreamChain.length - 1; i >= 0; i--) {
+            const node = usage.upstreamChain[i];
+            const isTerminal = node.isTerminal;
+            const terminalClass = isTerminal ? ' terminal' : '';
+            const sourceClass = node.sourceType === 'hook' ? ' hook' : node.sourceType === 'query' ? ' query' : node.sourceType === 'context' ? ' context' : '';
+            
+            html += '<div class="prop-upstream-node' + terminalClass + sourceClass + '">';
+            html += '<span class="prop-upstream-comp">' + node.componentName + '</span>';
+            if (node.propName) {
+              html += '<span class="prop-upstream-via">.' + node.propName + '</span>';
+            }
+            html += '<span class="prop-upstream-source">' + node.sourceName + '</span>';
+            if (isTerminal) {
+              html += '<span class="prop-upstream-terminal-badge ' + node.sourceType + '">' + node.sourceType.toUpperCase() + '</span>';
+            }
+            html += '</div>';
+            
+            if (i > 0) {
+              html += '<div class="prop-upstream-arrow">↓</div>';
+            }
+          }
+        } else {
+          html += '<div class="prop-upstream-node' + (usage.valueSource.type !== 'prop' ? ' terminal ' + usage.valueSource.type : '') + '">';
+          html += '<span class="prop-upstream-comp">' + usage.parentComponent + '</span>';
+          html += '<span class="prop-upstream-source">' + usage.valueSource.expression + '</span>';
+          if (usage.valueSource.type !== 'prop' && usage.valueSource.type !== 'computed') {
+            html += '<span class="prop-upstream-terminal-badge ' + usage.valueSource.type + '">' + usage.valueSource.type.toUpperCase() + '</span>';
+          }
+          html += '</div>';
+        }
+        
+        html += '</div>';
+      }
+      
+      html += '<div class="prop-flow-connector"><span class="prop-flow-arrow">↓</span></div>';
+      html += '</div>';
+    } else if (flowData.origin && flowData.origin.type !== 'prop') {
+      html += '<div class="prop-flow-origin">';
+      html += '<span class="prop-flow-origin-label">⬆ Origin:</span>';
+      html += '<span class="prop-flow-origin-value">' + flowData.origin.name + '</span>';
+      if (flowData.origin.type === 'hook') {
+        html += '<span class="prop-flow-origin-type">hook</span>';
+      } else if (flowData.origin.type === 'query') {
+        html += '<span class="prop-flow-origin-type">server</span>';
+      }
+      html += '</div>';
+      html += '<div class="prop-flow-connector"><span class="prop-flow-arrow">↓</span></div>';
+    } else if (flowData.origin && flowData.origin.type === 'prop') {
+      html += '<div class="prop-flow-origin">';
+      html += '<span class="prop-flow-origin-label">⬆ From parent:</span>';
+      html += '<span class="prop-flow-origin-value">' + flowData.origin.name + '</span>';
+      html += '</div>';
+      html += '<div class="prop-flow-connector"><span class="prop-flow-arrow">↓</span></div>';
+    }
+
+    if (flowData.root.children && flowData.root.children.length > 0) {
+      html += '<div class="prop-downward-section">';
+      html += '<div class="prop-section-label">⬇ WHERE IT FLOWS TO</div>';
+      html += renderTreeNode(flowData.root, 0);
+      html += '</div>';
+    } else {
+      html += renderTreeNode(flowData.root, 0);
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  function renderTreeNode(node, depth) {
+    if (depth > 4) return '';
+    
+    const hasSourceLink = node.parentFile && node.line;
+    const clickData = hasSourceLink ? ' data-source-file="' + node.parentFile + '" data-source-line="' + node.line + '"' : '';
+    const clickableClass = hasSourceLink ? ' clickable' : '';
+    
+    let html = '<div class="prop-tree-node" style="margin-left: ' + (depth * 16) + 'px">';
+    
+    html += '<div class="prop-tree-header' + clickableClass + '"' + clickData + '>';
+    html += '<span class="prop-tree-comp">' + node.componentName + '</span>';
+    html += '<span class="prop-tree-dot">.</span>';
+    html += '<span class="prop-tree-prop">' + node.propName + '</span>';
+    
+    if (node.fullPath && node.fullPath.includes('.')) {
+      const path = node.fullPath;
+      html += '<span class="prop-tree-access">' + path + '</span>';
+    } else if (node.fullPath && node.fullPath.includes('→')) {
+      html += '<span class="prop-tree-rename">⚠️ rename</span>';
+    }
+    
+    if (hasSourceLink) {
+      html += '<span class="prop-tree-goto" title="Jump to source">→</span>';
+    }
+    html += '</div>';
+    
+    if (node.children && node.children.length > 0) {
+      html += '<div class="prop-tree-children">';
+      for (const child of node.children) {
+        html += '<div class="prop-tree-branch">';
+        html += '<span class="prop-tree-line">├─</span>';
+        html += renderTreeNode(child, depth + 1);
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+    
+    html += '</div>';
+    return html;
+  }
+
+  function renderArchitectureTab(compName, smells, usage) {
+    let html = '';
+
+    if (!ARCHITECTURE) {
+      return '<div class="detail-empty">Architecture analysis not available</div>';
+    }
+
+    const totalSmells = ARCHITECTURE.smells?.length || 0;
+    const totalPassThrough = ARCHITECTURE.passThroughComponents?.length || 0;
+    const totalNoOps = ARCHITECTURE.noOpFunctions?.length || 0;
+
+    html += '<div class="arch-section">';
+    html += '<h4 class="arch-section-title">📊 Route Overview</h4>';
+    html += '<div class="arch-stat-row">';
+    html += '<span class="arch-stat-label">Total issues found:</span>';
+    html += '<span class="arch-stat-value">' + totalSmells + '</span>';
+    html += '</div>';
+    if (totalPassThrough > 0) {
+      html += '<div class="arch-stat-row">';
+      html += '<span class="arch-stat-label">Pass-through components:</span>';
+      html += '<span class="arch-stat-value">' + totalPassThrough + '</span>';
+      html += '</div>';
+    }
+    if (totalNoOps > 0) {
+      html += '<div class="arch-stat-row">';
+      html += '<span class="arch-stat-label">No-op functions:</span>';
+      html += '<span class="arch-stat-value">' + totalNoOps + '</span>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    if (usage && usage.totalUsages > 0) {
+      html += '<div class="arch-section">';
+      html += '<h4 class="arch-section-title">📍 Usage Context</h4>';
+      
+      html += '<div class="arch-stat-row">';
+      html += '<span class="arch-stat-label">Total usages:</span>';
+      html += '<span class="arch-stat-value">' + usage.totalUsages + '</span>';
+      html += '</div>';
+      
+      if (usage.usedInComponents && usage.usedInComponents.length > 0) {
+        html += '<div class="arch-stat-row">';
+        html += '<span class="arch-stat-label">Used by:</span>';
+        html += '<span class="arch-stat-value">' + usage.usedInComponents.slice(0, 5).join(', ');
+        if (usage.usedInComponents.length > 5) html += ' +' + (usage.usedInComponents.length - 5) + ' more';
+        html += '</span>';
+        html += '</div>';
+      }
+      
+      if (usage.pageContexts && usage.pageContexts.length > 0) {
+        html += '<div class="arch-stat-row">';
+        html += '<span class="arch-stat-label">Page contexts:</span>';
+        html += '<span class="arch-stat-value">' + usage.pageContexts.length + ' pages</span>';
+        html += '</div>';
+        html += '<div class="arch-pages">';
+        for (const ctx of usage.pageContexts.slice(0, 5)) {
+          html += '<div class="arch-page-badge">' + ctx + '</div>';
+        }
+        if (usage.pageContexts.length > 5) {
+          html += '<div class="arch-page-badge">+' + (usage.pageContexts.length - 5) + ' more</div>';
+        }
+        html += '</div>';
+      }
+      
+      html += '</div>';
+    }
+
+    const similar = getArchSimilarForComponent(compName);
+    if (similar && similar.length > 0) {
+      html += '<div class="arch-section">';
+      html += '<h4 class="arch-section-title">🔄 Similar Components</h4>';
+      for (const sim of similar.slice(0, 5)) {
+        const pct = Math.round(sim.similarity * 100);
+        html += '<div class="arch-similar-item">';
+        html += '<span class="arch-similar-name">' + sim.name + '</span>';
+        html += '<span class="arch-similar-pct">' + pct + '% similar</span>';
+        if (sim.sharedProps && sim.sharedProps.length > 0) {
+          html += '<div class="arch-similar-props">Shared: ' + sim.sharedProps.slice(0, 4).join(', ');
+          if (sim.sharedProps.length > 4) html += ' +' + (sim.sharedProps.length - 4);
+          html += '</div>';
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    if (smells && smells.length > 0) {
+      html += '<div class="arch-section">';
+      html += '<h4 class="arch-section-title">⚠️ Issues for ' + compName + '</h4>';
+      for (const smell of smells) {
+        const severityClass = smell.severity === 'error' ? 'smell-error' : smell.severity === 'warning' ? 'smell-warning' : 'smell-info';
+        html += '<div class="arch-smell ' + severityClass + '">';
+        html += '<div class="arch-smell-type">' + formatSmellType(smell.type) + '</div>';
+        html += '<div class="arch-smell-msg">' + smell.message + '</div>';
+        html += '<div class="arch-smell-suggestion">💡 ' + smell.suggestion + '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    if (ARCHITECTURE.passThroughComponents) {
+      const passThrough = ARCHITECTURE.passThroughComponents.find(p => p.name === compName);
+      if (passThrough) {
+        html += '<div class="arch-section">';
+        html += '<h4 class="arch-section-title">📦 Pass-Through Analysis</h4>';
+        html += '<div class="arch-passthrough">';
+        html += '<div class="arch-passthrough-bar">';
+        html += '<div class="arch-passthrough-fill" style="width: ' + Math.round(passThrough.ratio * 100) + '%"></div>';
+        html += '</div>';
+        html += '<div class="arch-passthrough-label">';
+        html += passThrough.propsPassedThrough + ' of ' + passThrough.propsReceived + ' props passed through';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+      }
+    }
+
+    if (ARCHITECTURE.smells && ARCHITECTURE.smells.length > 0 && smells.length === 0) {
+      html += '<div class="arch-section">';
+      html += '<h4 class="arch-section-title">⚠️ All Route Issues (top 5)</h4>';
+      for (const smell of ARCHITECTURE.smells.slice(0, 5)) {
+        const severityClass = smell.severity === 'error' ? 'smell-error' : smell.severity === 'warning' ? 'smell-warning' : 'smell-info';
+        html += '<div class="arch-smell ' + severityClass + '">';
+        html += '<div class="arch-smell-type">' + formatSmellType(smell.type) + '</div>';
+        html += '<div class="arch-smell-msg">' + smell.message + '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    return html;
+  }
+
+  function formatSmellType(type) {
+    const labels = {
+      'excessive-renaming': '🔄 Excessive Renaming',
+      'circular-naming': '🔁 Circular Naming',
+      'pass-through': '📦 Pass-Through',
+      'no-op-function': '🚫 No-Op Function',
+      'prop-drilling': '⬇️ Prop Drilling',
+      'similar-components': '👯 Similar Components',
+      'type-duplication': '📋 Type Duplication',
+    };
+    return labels[type] || type;
+  }
   
   function renderDataFlowGraph(graph) {
     if (!graph || !graph.propOrigins.length) return '<div class="detail-empty">No props detected for this component</div>';
@@ -2218,11 +2601,16 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
     currentDataFlowGraph = buildDataFlowGraph(node, domEl, live.props || {}, liveHooks);
 
+    const archSmellsForComponent = getArchSmellsForComponent(compName);
+    const archUsageForComponent = getArchUsageForComponent(compName);
+    const archCount = archSmellsForComponent.length + (archUsageForComponent ? 1 : 0);
+
     const tabs = [
       { id: 'props', label: 'Props', count: mergedProps.length },
       { id: 'state', label: 'State', count: live.state?.length || 0 },
       { id: 'hooks', label: 'Hooks', count: mergedHooks.length || staticHookNames.length },
       { id: 'dataflow', label: 'Data Flow', count: currentDataFlowGraph.propOrigins.length },
+      { id: 'arch', label: 'Architecture', count: archCount },
       { id: 'source', label: 'Source', count: 0 },
     ];
 
@@ -2232,12 +2620,24 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
     if (currentTab === 'props') {
       if (mergedProps.length) {
-        contentHtml = mergedProps.map(p => {
+        contentHtml = '<div class="props-list">' + mergedProps.map(p => {
           const typeHtml = p.type ? '<span class="detail-type">' + p.type + '</span>' : '';
           const optMark = p.optional ? '?' : '';
           const valueHtml = p.value !== undefined ? formatValue(p.value, 100) : '<span class="detail-undefined">undefined</span>';
-          return '<div class="detail-row"><div class="detail-key">' + p.name + optMark + ' ' + typeHtml + '</div><div class="detail-value">' + valueHtml + '</div></div>';
-        }).join('');
+          const flowData = getPropFlow(compName, p.name);
+          const nodeCount = flowData ? countTreeNodes(flowData.root) : 0;
+          const hasFlow = flowData && (nodeCount > 1 || (flowData.origin && flowData.origin.type !== 'prop'));
+          const isSelected = selectedProp === p.name;
+          const flowIndicator = hasFlow ? '<span class="flow-indicator" title="Click to see flow">📊</span>' : '';
+          let rowHtml = '<div class="detail-row prop-row' + (hasFlow ? ' has-flow' : '') + (isSelected ? ' selected' : '') + '" data-prop="' + p.name + '">';
+          rowHtml += '<div class="detail-key">' + p.name + optMark + ' ' + typeHtml + flowIndicator + '</div>';
+          rowHtml += '<div class="detail-value">' + valueHtml + '</div>';
+          rowHtml += '</div>';
+          if (isSelected && flowData) {
+            rowHtml += renderPropFlowGraph(flowData, p.name, compName);
+          }
+          return rowHtml;
+        }).join('') + '</div>';
       } else contentHtml = '<div class="detail-empty">No props</div>';
     } else if (currentTab === 'state') {
       if (live.state?.length) {
@@ -2254,6 +2654,8 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       } else contentHtml = '<div class="detail-empty">No hooks detected</div>';
     } else if (currentTab === 'dataflow') {
       contentHtml = renderDataFlowGraph(currentDataFlowGraph);
+    } else if (currentTab === 'arch') {
+      contentHtml = renderArchitectureTab(compName, archSmellsForComponent, archUsageForComponent);
     } else if (currentTab === 'source') {
       const filePath = node.source?.fileName || node.file || staticComp?.filePath;
       if (sourceLoadingState === 'loading') {
@@ -2579,7 +2981,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     setWidth: w => { panelWidth = w; shadow.querySelector(':host').style.setProperty('--panel-width', w + 'px'); localStorage.setItem('ro-panel-width', w.toString()); },
     refresh: refreshAnalysis,
     refreshFiber: refreshFiberTree,
-    toggleFilter: () => { filterEnabled = !filterEnabled; refreshFiberTree(); },
+    toggleFilter: () => { filterEnabled = !filterEnabled; renderCounts.clear(); totalRenders = 0; refreshFiberTree(); },
     getTree: () => TREE,
     getFiberTree: () => FIBER_TREE,
     getAllowlist: () => Array.from(componentAllowlist),
@@ -2663,6 +3065,67 @@ export function generateOverlayScript(data: RouteAnalysis): string {
         a.download = 'calculated-tree.json';
         a.click();
         URL.revokeObjectURL(url);
+      },
+      
+      findComponent(name, tree = TREE) {
+        const results = [];
+        function search(nodes, path = []) {
+          for (const node of nodes) {
+            const nodeName = node.component?.name || node.file;
+            const currentPath = [...path, nodeName];
+            if (nodeName === name) {
+              results.push({ node, path: currentPath });
+            }
+            if (node.children) {
+              search(node.children, currentPath);
+            }
+          }
+        }
+        search(tree);
+        return results;
+      },
+      
+      inspectComponent(name) {
+        const found = this.findComponent(name);
+        if (found.length === 0) {
+          console.log('Component not found:', name);
+          return null;
+        }
+        for (const { node, path } of found) {
+          console.log('=== ' + name + ' ===');
+          console.log('Path:', path.join(' > '));
+          console.log('Children count:', (node.children || []).length);
+          console.log('Children:');
+          for (let i = 0; i < (node.children || []).length; i++) {
+            const child = node.children[i];
+            const childName = child.component?.name || child.file;
+            const grandchildCount = (child.children || []).length;
+            console.log('  [' + i + '] ' + childName + (grandchildCount > 0 ? ' (children: ' + grandchildCount + ')' : ''));
+            if (childName === 'SpecimenTimingBadge' || childName === 'SpecimenImpression') {
+              console.log('      file:', child.file);
+              console.log('      children:', (child.children || []).map(gc => gc.component?.name || gc.file));
+            }
+          }
+        }
+        return found;
+      },
+      
+      inspectDOM(componentName) {
+        const treeEl = shadow.querySelector('.tree');
+        const nodes = treeEl.querySelectorAll('.node[data-name="' + componentName + '"]');
+        nodes.forEach((node, i) => {
+          console.log('=== DOM Node ' + i + ': ' + componentName + ' ===');
+          console.log('depth:', node.dataset.depth);
+          console.log('parent element:', node.parentElement?.className);
+          console.log('parent data-name:', node.parentElement?.closest('.node')?.dataset?.name);
+          const childrenDiv = node.querySelector(':scope > .children');
+          if (childrenDiv) {
+            const childNodes = childrenDiv.querySelectorAll(':scope > .node');
+            console.log('DOM children:', Array.from(childNodes).map(n => n.dataset.name));
+          } else {
+            console.log('No .children div');
+          }
+        });
       },
       
       logDataFlow() {

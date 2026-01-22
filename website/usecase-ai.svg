@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" role="img" aria-label="AI context export">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgba(180,255,176,0.08)"/>
+      <stop offset="1" stop-color="rgba(105,199,255,0.10)"/>
+    </linearGradient>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#69C7FF"/>
+      <stop offset="1" stop-color="#B4FFB0"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="420" rx="18" fill="url(#bg)"/>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial" fill="rgba(234,240,255,0.92)">
+    <g>
+      <rect x="42" y="86" width="312" height="248" rx="18" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.12)"/>
+      <text x="66" y="126" font-size="16">xray</text>
+      <text x="66" y="154" font-size="13" fill="rgba(255,255,255,0.68)">static AST</text>
+      <text x="66" y="176" font-size="13" fill="rgba(255,255,255,0.68)">runtime fiber</text>
+      <text x="66" y="198" font-size="13" fill="rgba(255,255,255,0.68)">route trees</text>
+      <text x="66" y="220" font-size="13" fill="rgba(255,255,255,0.68)">data flow</text>
+      <text x="66" y="242" font-size="13" fill="rgba(255,255,255,0.68)">client boundaries</text>
+      <rect x="66" y="266" width="264" height="44" rx="14" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.12)"/>
+      <text x="86" y="294" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(105,199,255,0.85)">repo-analysis-output/</text>
+    </g>
+
+    <g>
+      <rect x="404" y="110" width="220" height="74" rx="16" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="426" y="142" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">components.json</text>
+      <text x="426" y="164" font-size="12" fill="rgba(255,255,255,0.58)">props &#8226; hooks &#8226; RSC</text>
+    </g>
+    <g>
+      <rect x="404" y="206" width="220" height="74" rx="16" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="426" y="238" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">routes.json</text>
+      <text x="426" y="260" font-size="12" fill="rgba(255,255,255,0.58)">entry points</text>
+    </g>
+    <g>
+      <rect x="404" y="302" width="220" height="74" rx="16" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="426" y="334" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">route-*.json</text>
+      <text x="426" y="356" font-size="12" fill="rgba(255,255,255,0.58)">full tree + flow</text>
+    </g>
+
+    <g>
+      <rect x="684" y="156" width="154" height="108" rx="18" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.12)"/>
+      <text x="706" y="194" font-size="16">AI</text>
+      <text x="706" y="218" font-size="12" fill="rgba(255,255,255,0.62)">better context</text>
+      <text x="706" y="242" font-size="12" fill="rgba(255,255,255,0.62)">fewer misses</text>
+    </g>
+  </g>
+
+  <g filter="url(#glow)" fill="none" stroke="url(#acc)" stroke-width="2.4" opacity="0.95">
+    <path d="M 354 210 C 380 210 380 146 404 146"/>
+    <path d="M 354 210 C 380 210 380 242 404 242"/>
+    <path d="M 354 210 C 380 210 380 338 404 338"/>
+    <path d="M 624 146 C 654 146 654 206 684 206"/>
+    <path d="M 624 242 C 654 242 654 218 684 218"/>
+    <path d="M 624 338 C 654 338 654 230 684 230"/>
+  </g>
+</svg>

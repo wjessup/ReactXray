@@ -98,6 +98,7 @@ export interface RouteAnalysis {
   entryFiles: RouteEntryFiles;
   componentTree: ComponentTreeNode[];
   allComponents: ComponentInfo[];
+  architectureAnalysis?: ArchitectureAnalysis;
   stats: {
     totalComponents: number;
     clientComponents: number;
@@ -176,4 +177,112 @@ export interface InferredJsxUsage {
   variableName: string;
   propertyPath: string | null;
   inferredComponents: string[];
+}
+
+export interface ArchitectureSmell {
+  type: "excessive-renaming" | "circular-naming" | "pass-through" | "no-op-function" | "prop-drilling" | "similar-components" | "type-duplication";
+  severity: "warning" | "error" | "info";
+  message: string;
+  suggestion: string;
+  location: { file: string; line?: number };
+  details?: Record<string, unknown>;
+}
+
+export interface PropLineageSummary {
+  propName: string;
+  origin: string;
+  transformationCount: number;
+  hasComputation: boolean;
+  chain: string[];
+}
+
+export interface ComponentUsageSummary {
+  componentName: string;
+  file: string;
+  usedInFiles: string[];
+  usedInComponents: string[];
+  pageContexts: string[];
+  totalUsages: number;
+}
+
+export interface SimilarComponentInfo {
+  name: string;
+  file: string;
+  similarity: number;
+  sharedProps: string[];
+  reason: string;
+}
+
+export interface PropFlowNode {
+  id: string;
+  componentName: string;
+  file: string;
+  propName: string;
+  fullPath?: string;
+  line?: number;
+  parentFile?: string;
+  children: PropFlowNode[];
+}
+
+export interface PropOriginInfo {
+  type: "hook" | "query" | "context" | "literal" | "computed" | "prop";
+  name: string;
+  detail?: string;
+}
+
+export interface PropFlowTree {
+  propName: string;
+  componentName: string;
+  origin?: PropOriginInfo;
+  root: PropFlowNode;
+}
+
+export interface PropValueSource {
+  type: "prop" | "hook" | "query" | "context" | "literal" | "computed" | "urlParam" | "unknown";
+  expression: string;
+  sourceName?: string;
+}
+
+export interface PropUpstreamNode {
+  componentName: string;
+  file: string;
+  propName?: string;
+  sourceType: "prop" | "hook" | "query" | "context" | "literal" | "computed";
+  sourceName: string;
+  isTerminal: boolean;
+}
+
+export interface PropUsageSite {
+  parentComponent: string;
+  parentFile: string;
+  line: number;
+  valueSource: PropValueSource;
+  upstreamChain: PropUpstreamNode[];
+}
+
+export interface PropUpwardFlow {
+  componentName: string;
+  propName: string;
+  usages: PropUsageSite[];
+}
+
+export interface ArchitectureAnalysis {
+  smells: ArchitectureSmell[];
+  propLineages: PropLineageSummary[];
+  componentUsages: ComponentUsageSummary[];
+  similarComponents: Record<string, SimilarComponentInfo[]>;
+  propFlows: Record<string, PropFlowTree[]>;
+  propUpwardFlows: Record<string, PropUpwardFlow[]>;
+  passThroughComponents: {
+    name: string;
+    file: string;
+    propsReceived: number;
+    propsPassedThrough: number;
+    ratio: number;
+  }[];
+  noOpFunctions: {
+    name: string;
+    file: string;
+    renames: Record<string, string>;
+  }[];
 }

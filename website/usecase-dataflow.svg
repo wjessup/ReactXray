@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" role="img" aria-label="Server to client data flow tracing">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgba(105,199,255,0.10)"/>
+      <stop offset="1" stop-color="rgba(255,91,122,0.06)"/>
+    </linearGradient>
+    <linearGradient id="acc" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#B4FFB0"/>
+      <stop offset="1" stop-color="#69C7FF"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="880" height="420" rx="18" fill="url(#bg)"/>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial" fill="rgba(234,240,255,0.92)">
+    <g>
+      <rect x="34" y="70" width="360" height="84" rx="16" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="56" y="106" font-size="16">Server Component</text>
+      <text x="56" y="130" font-size="14" fill="rgba(180,255,176,0.85)">await fetchSpecimens()</text>
+      <text x="304" y="130" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(180,255,176,0.72)">SERVER</text>
+    </g>
+
+    <g>
+      <rect x="34" y="190" width="360" height="84" rx="16" fill="rgba(255,255,255,0.10)" stroke="rgba(255,255,255,0.14)"/>
+      <text x="56" y="226" font-size="16">Props</text>
+      <text x="56" y="250" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">results = serverQuery(specimens)</text>
+      <text x="310" y="250" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.55)">source: serverQuery</text>
+    </g>
+  </g>
+
+  <g font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial" fill="rgba(234,240,255,0.92)">
+    <g>
+      <rect x="486" y="110" width="360" height="84" rx="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.12)"/>
+      <text x="508" y="146" font-size="16">Client Component</text>
+      <text x="508" y="170" font-size="14" fill="rgba(105,199,255,0.85)">SpecimenGrid</text>
+      <text x="754" y="170" font-size="12" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(105,199,255,0.70)">CLIENT</text>
+    </g>
+
+    <g>
+      <rect x="486" y="250" width="360" height="112" rx="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.12)"/>
+      <text x="508" y="286" font-size="16">Runtime (fiber)</text>
+      <text x="508" y="312" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">state.page = 2</text>
+      <text x="508" y="334" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">memo.filtered = &amp; …</text>
+      <text x="508" y="356" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo" fill="rgba(255,255,255,0.72)">effect: refetch()</text>
+    </g>
+  </g>
+
+  <g filter="url(#glow)" fill="none" stroke="url(#acc)" stroke-width="2.4" opacity="0.95">
+    <path d="M 214 154 C 214 172 214 176 214 190"/>
+    <path d="M 394 232 C 440 232 440 152 486 152"/>
+    <path d="M 666 194 C 666 214 666 226 666 250"/>
+  </g>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" font-size="12" fill="rgba(255,255,255,0.62)">
+    <text x="404" y="142">props flow</text>
+    <text x="676" y="238">inspect live</text>
+  </g>
+</svg>

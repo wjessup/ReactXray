@@ -6,180 +6,13 @@
 
 This tool exists to help **LLMs like Claude Opus 4.5 make good architectural and refactoring decisions**.
 
-### The Core Problem
-
-LLMs operating in code editors have a fundamental visibility problem:
-
-1. **Partial File Views**: Models often see only 150 lines of a file, not the whole file
-2. **Limited File Context**: Models read one or several files, but not the dozens that might be relevant
-3. **No Big Picture**: Architecture involves seeing connections across many files and systems - understanding how they're connected reveals the constraints and problems of any particular implementation approach
-
-This creates a dangerous pattern: **local optimization with global ignorance**.
-
-- A model looks at a single file and says "the code is good" - but the architecture might be garbage
-- A model looks at the architecture diagram and says "looks reasonable" - but the implementation might be doing absurd busywork
-- A model doesn't want to open another file, so it creates an adaptor - now you have variable name pollution
-- A model builds on top of a poorly delineated feature boundary because that's what was already there - shit sandcastle grows
-
-### What We Need to Provide
-
-For LLMs to make good decisions, they need:
-
-1. **Cross-file visibility** - See how data flows through the entire component tree
-2. **Prop lineage tracking** - Know where a prop originated and how it transformed
-3. **Architectural smell detection** - Surface patterns that indicate structural problems
-4. **Boundary clarity** - Show where feature boundaries should be vs where they actually are
-5. **Naming consistency analysis** - Detect when the same concept has multiple names across files
+Core framing lives in `README.md`.
 
 ---
 
 ## Examples of Problems We Need to Detect
 
-### Example 1: Code Looks Good, Architecture is Crap
-
-```tsx
-// UserProfile.tsx - looks clean!
-export function UserProfile({ user }: { user: User }) {
-  return (
-    <Card>
-      <Avatar src={user.avatar} />
-      <Name>{user.displayName}</Name>
-      <UserStats userId={user.id} />
-    </Card>
-  );
-}
-
-// UserStats.tsx - also looks clean!
-export function UserStats({ userId }: { userId: string }) {
-  const stats = useUserStats(userId);
-  return <StatsDisplay stats={stats} />;
-}
-```
-
-**What the LLM sees**: Two clean components with clear props.
-
-**What the LLM misses**: `UserStats` re-fetches user data that was ALREADY available in the parent. The parent had the full `User` object but only passed the `id`, forcing a redundant API call. This pattern is repeated across 15 components, causing N+1 query problems throughout the app.
-
-**What we need to surface**:
-- "UserStats fetches data that parent already has"
-- "User data is fetched 8 times on this page"
-- "Consider passing user.stats directly instead of re-fetching"
-
----
-
-### Example 2: Architecture Looks Good, Implementation is Wasteful
-
-```tsx
-// Reasonable-looking component hierarchy:
-// ProductPage → ProductDetails → PriceDisplay → FormattedPrice
-
-// But look at the props...
-
-// ProductPage.tsx
-<ProductDetails 
-  productId={product.id}
-  productName={product.name}
-  productPrice={product.price}
-  productCurrency={product.currency}
-  productDiscountPercent={product.discount?.percent}
-  productDiscountExpiry={product.discount?.expiresAt}
-/>
-
-// ProductDetails.tsx  
-<PriceDisplay
-  price={productPrice}
-  currency={productCurrency}
-  discountPercent={productDiscountPercent}
-  discountExpiry={productDiscountExpiry}
-/>
-
-// PriceDisplay.tsx
-<FormattedPrice
-  amount={price}
-  currencyCode={currency}
-  discount={discountPercent}
-  discountEnds={discountExpiry}
-/>
-```
-
-**What the LLM sees**: Clean component tree, each level has clear props.
-
-**What the LLM misses**: 
-- `product.price` becomes `productPrice` becomes `price` becomes `amount` - FOUR NAMES for ONE value
-- Every intermediate component is just prop-forwarding with renames
-- Zero computational benefit from this decomposition
-- The entire chain could be `<FormattedPrice product={product} />` with the component extracting what it needs
-
-**What we need to surface**:
-- "Prop 'price' is renamed 4 times across component chain with no transformation"
-- "ProductDetails passes through 6 props without using them"
-- "Consider: pass 'product' object instead of destructuring at every level"
-
----
-
-### Example 3: Lazy Adaptor Creates Naming Pollution
-
-An LLM is asked to connect `CheckoutForm` to a new `PaymentProcessor`:
-
-```tsx
-// PaymentProcessor expects:
-interface PaymentInput {
-  totalAmount: number;
-  currencyCode: string;
-}
-
-// CheckoutForm has:
-const { finalPrice, currency } = useCart();
-
-// LLM is lazy, doesn't want to refactor, creates adaptor:
-const paymentInput: PaymentInput = {
-  totalAmount: finalPrice,  // finalPrice → totalAmount
-  currencyCode: currency,   // currency → currencyCode
-};
-```
-
-**What the LLM should have done**: Open `useCart` and see that `finalPrice` should probably be called `totalAmount` everywhere, and `currency` should be `currencyCode` for consistency.
-
-**What actually happens**: Now the codebase has both names. The next LLM (or developer) sees both conventions, picks one randomly, and the pollution spreads.
-
-**What we need to surface**:
-- "Same concept has 3 different names: finalPrice, totalAmount, price"
-- "Adaptor created to rename props - consider unifying naming at source"
-- "useCart.currency vs PaymentInput.currencyCode - naming inconsistency"
-
----
-
-### Example 4: Feature Boundaries Become Shit Sandcastle
-
-Junior dev needed to show if a product was discounted. Quick solution: stuff it into the existing `ProductImage` component since "it already has product info":
-
-```tsx
-// ProductImage.tsx - started as image display
-interface ProductImageProps {
-  src: string;
-  alt: string;
-  // ...then this got added
-  hasDiscount?: boolean;
-  discountBadgePosition?: 'top-left' | 'top-right';
-  discountText?: string;
-  // ...then this
-  isNewArrival?: boolean;
-  newArrivalBadgeColor?: string;
-  // ...then this  
-  stockLevel?: 'in-stock' | 'low' | 'out';
-  showStockIndicator?: boolean;
-}
-```
-
-**What the LLM sees**: A component with lots of props (looks flexible!).
-
-**What the LLM misses**: This is a franken-component. Image display, discount badges, new arrival indicators, and stock levels are FOUR separate concerns jammed into one component because it was convenient at the time. Now every change to discount display risks breaking image rendering.
-
-**What we need to surface**:
-- "ProductImage has 4 unrelated feature concerns"
-- "Discount, stock, and arrival props have no relationship to image display"
-- "Consider extracting: DiscountBadge, StockIndicator, NewArrivalBadge"
-- "Feature boundary violation: pricing logic in display component"
+These examples live in `problem_examples.md` so we keep “feature ideas” and “problems” separated.
 
 ---
 
@@ -262,6 +95,110 @@ interface ProductImageProps {
 - Automatic identification of "you should also look at" files
 
 **Output for LLM**: "To understand UserProfile, you should also read: useUserStats (data fetching), UserContext (where user data comes from), types/User.ts (type definitions)."
+
+### 8. **Component Usage Context ("Look Up" Analysis)**
+**Problem**: LLMs look DOWN into a component's implementation but never look UP to see where it's used, or ACROSS to see similar components.
+
+**Solution**: For any component, surface:
+- **Usage graph**: Where is this component imported? What pages does it appear on?
+- **Context variety**: How different are the usage contexts? (dealer vs public vs private)
+- **Similar components**: Other components with similar names, props, or structure
+- **Duplication detection**: Components that share >70% of their code
+- **Type similarity**: Different type definitions with overlapping fields
+
+**Output for LLM**: 
+```
+SpecimenCard usage context:
+- Direct parents: DealerInventoryGrid, CollectionGallery, PrivateCollectionList
+- Page contexts: 8 pages across 3 features (dealer, public, private)
+- Context differences: dealer shows wholesale prices, public shows retail, private shows acquisition cost
+
+Similar components found:
+- DealerSpecimenCard.tsx (340 lines) - 82% code overlap
+- PublicSpecimenCard.tsx (285 lines) - 78% code overlap
+- PrivateSpecimenCard.tsx (310 lines) - 75% code overlap
+⚠️ Consider unifying these 4 components (935 lines → ~400 lines estimated)
+
+Similar types found:
+- DealerSpecimen, PublicSpecimen, CollectorSpecimen share 15 of 20 fields
+⚠️ Consider creating base Specimen type with context-specific extensions
+```
+
+**Why this matters**: Without this, an LLM adds a feature to `DealerSpecimenCard`, doesn't realize `PublicSpecimenCard` and `PrivateSpecimenCard` exist, and the codebase diverges further. Or worse, creates a FOURTH card component because it didn't know any existed.
+
+### 9. **Change Propagation Detection (Automated "Missed Update" Catching)**
+**Problem**: You improve search on the main search page. Users report "search is great now, but when I search my collection it still has the old behavior." You updated one component but there were 3 similar components that needed the same change.
+
+Currently this is caught by:
+- User bug reports ("collection search is broken")
+- QA manually testing every similar feature
+- Code review (if reviewer happens to know about the other components)
+
+All of these are slow, expensive, and unreliable.
+
+**Solution**: Automated detection at multiple stages:
+
+**1. At commit time (pre-commit/CI hook)**:
+```
+⚠️ CHANGE PROPAGATION WARNING
+
+You modified: SearchResults.tsx
+- Added: filter by date range
+- Added: sort by relevance
+
+Similar components that may need the same change:
+├── CollectionSearchResults.tsx (78% code similarity)
+│   └── Does NOT have: filter by date range, sort by relevance
+├── DealerInventorySearch.tsx (72% code similarity)  
+│   └── Does NOT have: filter by date range, sort by relevance
+└── AdminUserSearch.tsx (65% code similarity)
+    └── Does NOT have: filter by date range
+
+Action required: Confirm these components should NOT get this change, or update them.
+```
+
+**2. At PR review time**:
+- Automatically add reviewers who own the related components
+- Generate "blast radius" report showing what else might need updating
+- Block merge until similar components are explicitly marked "intentionally different" or updated
+
+**3. Continuous monitoring (post-merge)**:
+- Track feature parity across similar components
+- Alert when components that were in sync start diverging
+- Generate "drift reports" showing which features exist where
+
+**4. Semantic feature detection** (not just code similarity):
+```
+Feature: "date range filter"
+Present in:
+✅ SearchResults.tsx (added in PR #1234)
+❌ CollectionSearchResults.tsx  
+❌ DealerInventorySearch.tsx
+
+Feature: "sort by relevance"  
+Present in:
+✅ SearchResults.tsx (added in PR #1234)
+✅ CollectionSearchResults.tsx (added in PR #1156, different implementation)
+❌ DealerInventorySearch.tsx
+```
+
+**Implementation approaches**:
+- **AST-based**: Detect similar function structures, hook usage patterns, prop signatures
+- **Semantic**: Use embeddings to find conceptually similar code (search, filter, sort, paginate)
+- **Behavioral**: Track what features/capabilities each component has
+- **Historical**: Learn from past "missed update" bugs which components tend to need synchronized changes
+
+**Output for LLM**:
+```
+Before making changes to SearchResults.tsx, be aware:
+- 3 similar search components exist in the codebase
+- These components have historically been updated together (8 of last 10 changes)
+- Last time SearchResults was updated alone, a bug was filed 2 weeks later for CollectionSearchResults
+
+Recommendation: Update all 4 components together, or document why this change is specific to SearchResults.
+```
+
+**Why this is critical**: This is the difference between reactive bug-fixing ("users found a problem") and proactive consistency ("we caught it before it shipped"). The tool should make it HARDER to update one component without at least acknowledging the related ones.
 
 ---
 
@@ -387,6 +324,58 @@ interface ProductImageProps {
 14. Architecture regression detection
 15. ADR integration
 16. Team collaboration features
+
+---
+
+## Implementation Status
+
+### Completed Features
+
+#### Architecture Tab in Component Dialog
+**Status**: ✅ Implemented
+
+New "Architecture" tab added to the component detail dialog showing:
+
+1. **Usage Context**
+   - Total usage count
+   - Which components use this component
+   - Which page contexts it appears in
+
+2. **Similar Components Detection**
+   - Finds components with similar names or overlapping props
+   - Shows similarity percentage
+   - Lists shared props
+
+3. **Architecture Issues**
+   - Pass-through component detection (components that just forward props)
+   - No-op function detection (functions that only rename fields)
+   - Similar component warnings
+
+4. **Pass-Through Analysis**
+   - Visual bar showing ratio of props passed through vs used
+   - Helps identify components that add complexity without value
+
+**Files Added**:
+- `src/analyze/ast/prop-lineage.ts` - Prop passing analysis, no-op detection
+- `src/analyze/ast/usage-context.ts` - Component usage tracking, similarity detection
+
+**Files Modified**:
+- `src/types.ts` - Added ArchitectureAnalysis types
+- `src/analyze/index.ts` - Integrated architecture analysis into route analysis
+- `src/overlay/index.ts` - Added Architecture tab rendering
+- `src/overlay/styles.ts` - Added Architecture tab styles
+
+### In Progress
+
+- Prop lineage visualization (tracking full rename chains)
+- Data fetch duplication detection
+- Change propagation warnings
+
+### Next Up
+
+- LLM-friendly export format
+- Naming consistency analysis
+- Component complexity scoring
 
 ---
 

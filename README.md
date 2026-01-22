@@ -1,10 +1,12 @@
-#  
-
-pnpm serve:watch --proxy http://localhost:3000 --project ~/Code/crystal-market-mvp/web-app
-
 # Repo Analyzer
 
 CLI tool that analyzes JavaScript/TypeScript codebases and generates JSON artifacts for AI consumption. Includes a browser overlay for visualizing React component trees on live sites.
+
+## Docs
+
+- **Problem examples**: `problem_examples.md`
+- **Technical solutions**: `problems_we_fix.md`
+- **Feature ideas**: `feature_ideas.md`
 
 ## Install
 
@@ -242,12 +244,30 @@ Builds a complete component tree for a specific route, following imports to map 
 
 ## Why This Exists
 
-AI assistants reading raw files often miss the full picture. They see `page.tsx` but don't understand:
+### The Core Problem
 
-- What layout wraps it
-- Where data flows from (URL params → hooks → props → child components)
-- Which components are client vs server
-- What queries fetch the data being displayed
+LLMs operating in code editors have a fundamental visibility problem:
+
+1. **Partial File Views**: Models often see only 150 lines of a file, not the whole file
+2. **Limited File Context**: Models read one or several files, but not the dozens that might be relevant
+3. **No Big Picture**: Architecture involves seeing connections across many files and systems - understanding how they're connected reveals the constraints and problems of any particular implementation approach
+
+This creates a dangerous pattern: **local optimization with global ignorance**.
+
+- A model looks at a single file and says "the code is good" - but the architecture might be garbage
+- A model looks at the architecture diagram and says "looks reasonable" - but the implementation might be doing absurd busywork
+- A model doesn't want to open another file, so it creates an adaptor - now you have variable name pollution
+- A model builds on top of a poorly delineated feature boundary because that's what was already there - shit sandcastle grows
+
+### What We Need to Provide
+
+For LLMs to make good decisions, they need:
+
+1. **Cross-file visibility** - See how data flows through the entire component tree
+2. **Prop lineage tracking** - Know where a prop originated and how it transformed
+3. **Architectural smell detection** - Surface patterns that indicate structural problems
+4. **Boundary clarity** - Show where feature boundaries should be vs where they actually are
+5. **Naming consistency analysis** - Detect when the same concept has multiple names across files
 
 This tool generates **synthesized context** that shows the relational structure—how components connect, what data flows through them, and where the boundaries are.
 

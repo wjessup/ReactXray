@@ -30,9 +30,8 @@ function clamp(v, a, b) {
 }
 
 function resize() {
-  const rect = canvas.getBoundingClientRect()
-  state.w = Math.max(320, Math.floor(rect.width))
-  state.h = Math.max(320, Math.floor(rect.height))
+  state.w = Math.max(320, Math.floor(window.innerWidth || 0))
+  state.h = Math.max(320, Math.floor(window.innerHeight || 0))
   const r = state.renderer
   const c = state.camera
   if (!r || !c) return
@@ -97,7 +96,7 @@ function makeScene() {
       size: 0.06,
       sizeAttenuation: true,
       transparent: true,
-      opacity: 0.92,
+      opacity: 0.55,
       vertexColors: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -122,7 +121,7 @@ function makeScene() {
     lineGeom,
     new THREE.LineBasicMaterial({
       transparent: true,
-      opacity: 0.18,
+      opacity: 0.08,
       color: 0x93a4ff,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -184,13 +183,13 @@ function tick(t) {
     return
   }
 
-  const time = t * 0.00026
+  const time = t * 0.00014
   const base = state.base
   const pos = state.pos
 
-  const drift = 0.85
-  const swirl = 0.55
-  const pulse = 0.4 + Math.sin(t * 0.0009) * 0.15
+  const drift = 0.55
+  const swirl = 0.40
+  const pulse = 0.26 + Math.sin(t * 0.00055) * 0.10
 
   for (let i = 0; i < pos.length; i += 3) {
     const x0 = base[i + 0]
@@ -212,11 +211,11 @@ function tick(t) {
 
   const mx = clamp(state.mouseX, -1, 1)
   const my = clamp(state.mouseY, -1, 1)
-  group.rotation.x += ((-my * 0.22) - group.rotation.x) * clamp(dt * 2.4, 0, 1)
-  group.rotation.y += ((mx * 0.26) - group.rotation.y) * clamp(dt * 2.4, 0, 1)
-  group.rotation.z = Math.sin(time * 0.7) * 0.035
-  group.position.z = Math.sin(time * 1.1) * 0.35
-  state.lines.material.opacity = 0.12 + pulse * 0.12
+  group.rotation.x += ((-my * 0.14) - group.rotation.x) * clamp(dt * 1.6, 0, 1)
+  group.rotation.y += ((mx * 0.16) - group.rotation.y) * clamp(dt * 1.6, 0, 1)
+  group.rotation.z = Math.sin(time * 0.6) * 0.02
+  group.position.z = Math.sin(time * 0.9) * 0.22
+  state.lines.material.opacity = 0.05 + pulse * 0.07
 
   renderer.render(scene, camera)
 }
@@ -243,6 +242,13 @@ window.addEventListener("resize", () => {
   resizeTimer = window.setTimeout(() => {
     resize()
   }, 140)
+})
+
+window.visualViewport?.addEventListener("resize", () => {
+  window.clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(() => {
+    resize()
+  }, 0)
 })
 
 window.addEventListener("pointermove", (e) => {

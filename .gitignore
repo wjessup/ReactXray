@@ -4,3 +4,4 @@
 .cursor
 .pnpm-store
 /debug
+.launch-command.txt

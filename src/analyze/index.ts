@@ -13,6 +13,11 @@ import type {
   ProjectAnalysis,
   ProjectJsxExports,
   InferredJsxUsage,
+  ArchitectureAnalysis,
+  ArchitectureSmell,
+  PropFlowTree,
+  PropFlowNode,
+  PropOriginInfo,
 } from "../types.js";
 import {
   extractComponentFromFile,
@@ -25,6 +30,20 @@ import {
 } from "./ast.js";
 import { buildImportGraph, resolveJsxImports } from "./imports.js";
 import { resolveRouteFiles } from "./routes.js";
+import {
+  detectNoOpFunctions,
+  extractPropPassing,
+  analyzePassThroughComponents,
+  detectArchitectureSmells,
+  PropPassingInfo,
+  buildPropUpwardFlows,
+} from "./ast/prop-lineage.js";
+import {
+  buildComponentUsageMap,
+  buildProjectWideUsageMap,
+  findSimilarComponents,
+  generateComponentContextSummary,
+} from "./ast/usage-context.js";
 
 export interface EnhancedJsxUsage extends JsxUsage {
   inferredInComponent: Map<string, string[]>;
@@ -310,11 +329,20 @@ export async function analyzeRoute(
   );
   const allComponents = Array.from(componentMap.values());
 
+  const architectureAnalysis = await buildArchitectureAnalysis(
+    project,
+    visited,
+    componentMap,
+    nameToFileMap,
+    targetPath
+  );
+
   return {
     route: normalizedRoute,
     entryFiles,
     componentTree,
     allComponents,
+    architectureAnalysis,
     stats: {
       totalComponents: allComponents.length,
       clientComponents: allComponents.filter((c) => c.isClientComponent).length,
@@ -322,6 +350,285 @@ export async function analyzeRoute(
       uniqueHooks: [...new Set(allComponents.flatMap((c) => c.hooks))],
     },
   };
+}
+
+async function buildArchitectureAnalysis(
+  project: Project,
+  visited: Set<string>,
+  componentMap: Map<string, ComponentInfo>,
+  nameToFileMap: Map<string, string>,
+  targetPath: string
+): Promise<ArchitectureAnalysis> {
+  const propPassingByFile = new Map<string, PropPassingInfo[]>();
+  const noOpFunctions: ArchitectureAnalysis["noOpFunctions"] = [];
+  const componentPropsMap = new Map<string, { name: string; file: string; props: string[] }>();
+
+  for (const absPath of visited) {
+    if (!absPath.endsWith(".tsx") && !absPath.endsWith(".jsx")) continue;
+    
+    const sourceFile = project.getSourceFile(absPath);
+    if (!sourceFile) continue;
+
+    const relPath = path.relative(targetPath, absPath);
+
+    const propPassing = extractPropPassing(sourceFile);
+    propPassingByFile.set(relPath, propPassing);
+
+    const noOps = detectNoOpFunctions(sourceFile);
+    for (const noOp of noOps) {
+      noOpFunctions.push({
+        name: noOp.name,
+        file: path.relative(targetPath, noOp.file),
+        renames: noOp.renames,
+      });
+    }
+
+    const comp = componentMap.get(relPath);
+    if (comp) {
+      componentPropsMap.set(relPath, {
+        name: comp.name,
+        file: relPath,
+        props: comp.props.map(p => p.name),
+      });
+    }
+  }
+
+  const passThroughComponents = analyzePassThroughComponents(
+    componentPropsMap,
+    propPassingByFile
+  );
+
+  const componentFiles = new Map<string, string>();
+  for (const [file, comp] of componentMap) {
+    componentFiles.set(comp.name, file);
+  }
+
+  const usageMap = buildComponentUsageMap(project, componentFiles, targetPath);
+  const similarMap = findSimilarComponents(componentPropsMap);
+
+  const projectWideUsageMap = await buildProjectWideUsageMap(targetPath, componentFiles);
+
+  const componentUsages: ArchitectureAnalysis["componentUsages"] = [];
+  for (const [name, usage] of projectWideUsageMap) {
+    componentUsages.push({
+      componentName: name,
+      file: usage.componentFile,
+      usedInFiles: [...new Set(usage.usedIn.map(u => u.file))],
+      usedInComponents: [...new Set(usage.usedIn.map(u => u.componentName))],
+      pageContexts: usage.pageContexts,
+      totalUsages: usage.totalUsageCount,
+    });
+  }
+
+  const similarComponents: Record<string, ArchitectureAnalysis["similarComponents"][string]> = {};
+  for (const [name, similar] of similarMap) {
+    similarComponents[name] = similar.map(s => ({
+      name: s.name,
+      file: s.file,
+      similarity: s.similarity,
+      sharedProps: s.sharedProps,
+      reason: s.reason,
+    }));
+  }
+
+  const smells: ArchitectureSmell[] = [];
+
+  for (const passThrough of passThroughComponents) {
+    smells.push({
+      type: "pass-through",
+      severity: "warning",
+      message: `${passThrough.name} passes through ${passThrough.propsPassedThrough} of ${passThrough.propsReceived} props (${Math.round(passThrough.passThroughRatio * 100)}%)`,
+      suggestion: "This component adds complexity without value. Consider removing from hierarchy or consolidating.",
+      location: { file: passThrough.file },
+      details: {
+        propsReceived: passThrough.propsReceived,
+        propsPassedThrough: passThrough.propsPassedThrough,
+      },
+    });
+  }
+
+  for (const noOp of noOpFunctions) {
+    const renameStr = Object.entries(noOp.renames)
+      .map(([from, to]) => `${from}→${to}`)
+      .join(", ");
+    smells.push({
+      type: "no-op-function",
+      severity: "warning",
+      message: `${noOp.name}() only renames fields: ${renameStr}`,
+      suggestion: "Delete this function and use the original field names",
+      location: { file: noOp.file },
+      details: { renames: noOp.renames },
+    });
+  }
+
+  for (const [name, similar] of similarMap) {
+    if (similar.length > 0 && similar[0].similarity > 0.7) {
+      smells.push({
+        type: "similar-components",
+        severity: "info",
+        message: `${name} is similar to ${similar.map(s => s.name).join(", ")}`,
+        suggestion: "Consider unifying these components to reduce duplication",
+        location: { file: componentFiles.get(name) || "" },
+        details: {
+          similarComponents: similar.map(s => ({ name: s.name, similarity: s.similarity })),
+        },
+      });
+    }
+  }
+
+  const propFlows = buildPropFlows(componentMap, propPassingByFile, nameToFileMap);
+  const propUpwardFlows = buildPropUpwardFlows(componentMap, projectWideUsageMap, propPassingByFile);
+
+  return {
+    smells,
+    propLineages: [],
+    componentUsages,
+    similarComponents,
+    propFlows,
+    propUpwardFlows,
+    passThroughComponents: passThroughComponents.map(p => ({
+      name: p.name,
+      file: p.file,
+      propsReceived: p.propsReceived,
+      propsPassedThrough: p.propsPassedThrough,
+      ratio: p.passThroughRatio,
+    })),
+    noOpFunctions,
+  };
+}
+
+function buildPropFlows(
+  componentMap: Map<string, ComponentInfo>,
+  propPassingByFile: Map<string, PropPassingInfo[]>,
+  nameToFileMap: Map<string, string>
+): Record<string, PropFlowTree[]> {
+  const result: Record<string, PropFlowTree[]> = {};
+
+  for (const [file, comp] of componentMap) {
+    const flows: PropFlowTree[] = [];
+    const propPassing = propPassingByFile.get(file) || [];
+
+    for (const propInfo of comp.props) {
+      const propName = propInfo.name;
+      
+      const origin = detectPropOrigin(comp, propName, propPassingByFile, nameToFileMap, componentMap);
+      
+      const rootNode: PropFlowNode = {
+        id: `${comp.name}.${propName}`,
+        componentName: comp.name,
+        file,
+        propName,
+        fullPath: propName,
+        children: [],
+      };
+
+      buildPropTree(rootNode, propName, propPassing, propPassingByFile, nameToFileMap, file, 0);
+
+      if (rootNode.children.length > 0 || origin.type !== "prop") {
+        flows.push({
+          propName,
+          componentName: comp.name,
+          origin,
+          root: rootNode,
+        });
+      }
+    }
+
+    if (flows.length > 0) {
+      result[comp.name] = flows;
+    }
+  }
+
+  return result;
+}
+
+function buildPropTree(
+  node: PropFlowNode,
+  sourcePropName: string,
+  propPassing: PropPassingInfo[],
+  propPassingByFile: Map<string, PropPassingInfo[]>,
+  nameToFileMap: Map<string, string>,
+  parentFile: string,
+  depth: number
+): void {
+  if (depth > 3) return;
+
+  const childPasses = propPassing.filter(p => {
+    if (p.sourceType !== "prop" && p.sourceType !== "destructure") return false;
+    
+    const source = p.sourcePropName || p.sourceExpression;
+    const rootProp = source.split(".")[0];
+    return rootProp === sourcePropName;
+  });
+
+  for (const childPass of childPasses) {
+    const childFile = nameToFileMap.get(childPass.componentName);
+    const source = childPass.sourcePropName || childPass.sourceExpression;
+    const isPropertyAccess = source.includes(".");
+    
+    const childNode: PropFlowNode = {
+      id: `${childPass.componentName}.${childPass.propName}`,
+      componentName: childPass.componentName,
+      file: childFile || "",
+      propName: childPass.propName,
+      fullPath: isPropertyAccess ? source : (source !== childPass.propName ? `${source} → ${childPass.propName}` : source),
+      line: childPass.line,
+      parentFile,
+      children: [],
+    };
+
+    node.children.push(childNode);
+
+    if (childFile && depth < 3) {
+      const grandchildPassing = propPassingByFile.get(childFile) || [];
+      buildPropTree(childNode, childPass.propName, grandchildPassing, propPassingByFile, nameToFileMap, childFile, depth + 1);
+    }
+  }
+}
+
+function detectPropOrigin(
+  comp: ComponentInfo,
+  propName: string,
+  propPassingByFile: Map<string, PropPassingInfo[]>,
+  nameToFileMap: Map<string, string>,
+  componentMap: Map<string, ComponentInfo>
+): PropOriginInfo {
+  if (comp.serverQueries && comp.serverQueries.length > 0) {
+    for (const query of comp.serverQueries) {
+      if (query.toLowerCase().includes(propName.toLowerCase())) {
+        return { type: "query", name: query, detail: "Server query" };
+      }
+    }
+  }
+  
+  if (comp.hooks && comp.hooks.length > 0) {
+    for (const hook of comp.hooks) {
+      if (hook.toLowerCase().includes(propName.toLowerCase())) {
+        return { type: "hook", name: hook };
+      }
+    }
+  }
+
+  for (const [parentFile, parentComp] of componentMap) {
+    const parentPassing = propPassingByFile.get(parentFile) || [];
+    for (const pass of parentPassing) {
+      if (pass.componentName === comp.name && pass.propName === propName) {
+        const source = pass.sourcePropName || pass.sourceExpression;
+        if (pass.sourceType === "hook") {
+          return { type: "hook", name: pass.sourceHookName || source };
+        }
+        if (pass.sourceType === "prop") {
+          return { type: "prop", name: `${parentComp.name}.${source}` };
+        }
+        if (pass.sourceType === "literal") {
+          return { type: "literal", name: source };
+        }
+        return { type: "computed", name: source };
+      }
+    }
+  }
+
+  return { type: "prop", name: "parent" };
 }
 
 function buildComponentTree(

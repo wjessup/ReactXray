@@ -26,6 +26,7 @@
         </a>
         <nav class="links" aria-label="Primary">
           <a href="#features">Features</a>
+          <a href="#usecases">Use cases</a>
           <a href="#how">How it works</a>
           <a href="#use">Use</a>
         </nav>
@@ -131,6 +132,42 @@
             <div class="card">
               <h3>AI-ready artifacts</h3>
               <p>Export synthesized JSON context that models structure and relationships.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="usecases" class="section">
+        <div class="wrap">
+          <h2>Use cases (the messy real-world stuff)</h2>
+          <p class="lead">
+            Next.js apps rarely have one clean client boundary. xray helps when your tree is fragmented, your data is
+            threaded through multiple layers, and you need answers fast.
+          </p>
+          <div class="useGrid">
+            <div class="card useCard">
+              <h3>
+                Multiple client “bridge” points
+                <span class="useTag">RSC boundaries</span>
+              </h3>
+              <img class="illus" src="./usecase-bridges.svg" alt="Diagram showing server layouts rendering multiple client islands with nested bridges." />
+              <p>See the full hierarchy, even when the browser fiber tree starts deep inside the page.</p>
+            </div>
+            <div class="card useCard">
+              <h3>
+                Trace server → props → client state
+                <span class="useTag">data flow</span>
+              </h3>
+              <img class="illus" src="./usecase-dataflow.svg" alt="Diagram showing a server fetch producing props that flow into client components and state/hooks." />
+              <p>Understand where a value originates and how it propagates through components and hooks.</p>
+            </div>
+            <div class="card useCard">
+              <h3>
+                Export context for AI
+                <span class="useTag">JSON artifacts</span>
+              </h3>
+              <img class="illus" src="./usecase-ai.svg" alt="Diagram showing xray exporting synthesized JSON context for AI tools." />
+              <p>Generate synthesized, relational artifacts so an AI can reason about structure—not just files.</p>
             </div>
           </div>
         </div>
