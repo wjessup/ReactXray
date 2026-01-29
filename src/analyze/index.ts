@@ -50,7 +50,7 @@ export interface EnhancedJsxUsage extends JsxUsage {
 }
 
 export async function getProjectComponentNames(
-  targetPath: string
+  targetPath: string,
 ): Promise<Set<string>> {
   const files = await glob("**/*.{tsx,jsx}", {
     cwd: targetPath,
@@ -163,7 +163,7 @@ export interface CrossFileDebugInfo {
 function buildProjectJsxExports(
   project: Project,
   visited: Set<string>,
-  targetPath: string
+  targetPath: string,
 ): ProjectJsxExports {
   const byFile = new Map();
 
@@ -187,26 +187,26 @@ function buildProjectJsxExports(
 function computeInferredJsxForFile(
   sourceFile: SourceFile,
   projectJsxExports: ProjectJsxExports,
-  targetPath: string
+  targetPath: string,
 ): InferredJsxUsage[] {
   const resolvedImports = resolveJsxImports(
     sourceFile,
     projectJsxExports,
-    targetPath
+    targetPath,
   );
   return extractInferredJsx(sourceFile, resolvedImports);
 }
 
 function buildEnhancedJsxUsage(
   jsxUsage: JsxUsage,
-  inferredJsx: InferredJsxUsage[]
+  inferredJsx: InferredJsxUsage[],
 ): EnhancedJsxUsage {
   const inferredInComponent = new Map<string, string[]>();
 
   for (const [parentName, identifiers] of jsxUsage.identifiersInComponent) {
     for (const identifierName of identifiers) {
       const inference = inferredJsx.find(
-        (i) => i.variableName === identifierName && i.propertyPath === null
+        (i) => i.variableName === identifierName && i.propertyPath === null,
       );
       if (inference && inference.inferredComponents.length > 0) {
         const existing = inferredInComponent.get(parentName) || [];
@@ -225,7 +225,7 @@ function buildEnhancedJsxUsage(
 
 export async function analyzeRoute(
   targetPath: string,
-  route: string
+  route: string,
 ): Promise<RouteAnalysis> {
   const normalizedRoute = route.startsWith("/") ? route : `/${route}`;
   const segments = normalizedRoute.split("/").filter(Boolean);
@@ -271,7 +271,7 @@ export async function analyzeRoute(
   const { visited, graph } = buildImportGraph(
     project,
     allEntryPaths,
-    targetPath
+    targetPath,
   );
 
   const componentMap = new Map<string, ComponentInfo>();
@@ -298,7 +298,7 @@ export async function analyzeRoute(
   const projectJsxExports = buildProjectJsxExports(
     project,
     visited,
-    targetPath
+    targetPath,
   );
 
   for (const absPath of visited) {
@@ -311,7 +311,7 @@ export async function analyzeRoute(
           const inferredJsx = computeInferredJsxForFile(
             sourceFile,
             projectJsxExports,
-            targetPath
+            targetPath,
           );
           const enhanced = buildEnhancedJsxUsage(jsxUsage, inferredJsx);
           enhancedJsxUsageMap.set(relPath, enhanced);
@@ -325,7 +325,7 @@ export async function analyzeRoute(
     targetPath,
     enhancedJsxUsageMap,
     nameToFileMap,
-    componentMap
+    componentMap,
   );
   const allComponents = Array.from(componentMap.values());
 
@@ -334,7 +334,7 @@ export async function analyzeRoute(
     visited,
     componentMap,
     nameToFileMap,
-    targetPath
+    targetPath,
   );
 
   return {
@@ -357,15 +357,18 @@ async function buildArchitectureAnalysis(
   visited: Set<string>,
   componentMap: Map<string, ComponentInfo>,
   nameToFileMap: Map<string, string>,
-  targetPath: string
+  targetPath: string,
 ): Promise<ArchitectureAnalysis> {
   const propPassingByFile = new Map<string, PropPassingInfo[]>();
   const noOpFunctions: ArchitectureAnalysis["noOpFunctions"] = [];
-  const componentPropsMap = new Map<string, { name: string; file: string; props: string[] }>();
+  const componentPropsMap = new Map<
+    string,
+    { name: string; file: string; props: string[] }
+  >();
 
   for (const absPath of visited) {
     if (!absPath.endsWith(".tsx") && !absPath.endsWith(".jsx")) continue;
-    
+
     const sourceFile = project.getSourceFile(absPath);
     if (!sourceFile) continue;
 
@@ -388,14 +391,14 @@ async function buildArchitectureAnalysis(
       componentPropsMap.set(relPath, {
         name: comp.name,
         file: relPath,
-        props: comp.props.map(p => p.name),
+        props: comp.props.map((p) => p.name),
       });
     }
   }
 
   const passThroughComponents = analyzePassThroughComponents(
     componentPropsMap,
-    propPassingByFile
+    propPassingByFile,
   );
 
   const componentFiles = new Map<string, string>();
@@ -406,23 +409,29 @@ async function buildArchitectureAnalysis(
   const usageMap = buildComponentUsageMap(project, componentFiles, targetPath);
   const similarMap = findSimilarComponents(componentPropsMap);
 
-  const projectWideUsageMap = await buildProjectWideUsageMap(targetPath, componentFiles);
+  const projectWideUsageMap = await buildProjectWideUsageMap(
+    targetPath,
+    componentFiles,
+  );
 
   const componentUsages: ArchitectureAnalysis["componentUsages"] = [];
   for (const [name, usage] of projectWideUsageMap) {
     componentUsages.push({
       componentName: name,
       file: usage.componentFile,
-      usedInFiles: [...new Set(usage.usedIn.map(u => u.file))],
-      usedInComponents: [...new Set(usage.usedIn.map(u => u.componentName))],
+      usedInFiles: [...new Set(usage.usedIn.map((u) => u.file))],
+      usedInComponents: [...new Set(usage.usedIn.map((u) => u.componentName))],
       pageContexts: usage.pageContexts,
       totalUsages: usage.totalUsageCount,
     });
   }
 
-  const similarComponents: Record<string, ArchitectureAnalysis["similarComponents"][string]> = {};
+  const similarComponents: Record<
+    string,
+    ArchitectureAnalysis["similarComponents"][string]
+  > = {};
   for (const [name, similar] of similarMap) {
-    similarComponents[name] = similar.map(s => ({
+    similarComponents[name] = similar.map((s) => ({
       name: s.name,
       file: s.file,
       similarity: s.similarity,
@@ -438,7 +447,8 @@ async function buildArchitectureAnalysis(
       type: "pass-through",
       severity: "warning",
       message: `${passThrough.name} passes through ${passThrough.propsPassedThrough} of ${passThrough.propsReceived} props (${Math.round(passThrough.passThroughRatio * 100)}%)`,
-      suggestion: "This component adds complexity without value. Consider removing from hierarchy or consolidating.",
+      suggestion:
+        "This component adds complexity without value. Consider removing from hierarchy or consolidating.",
       location: { file: passThrough.file },
       details: {
         propsReceived: passThrough.propsReceived,
@@ -466,18 +476,29 @@ async function buildArchitectureAnalysis(
       smells.push({
         type: "similar-components",
         severity: "info",
-        message: `${name} is similar to ${similar.map(s => s.name).join(", ")}`,
+        message: `${name} is similar to ${similar.map((s) => s.name).join(", ")}`,
         suggestion: "Consider unifying these components to reduce duplication",
         location: { file: componentFiles.get(name) || "" },
         details: {
-          similarComponents: similar.map(s => ({ name: s.name, similarity: s.similarity })),
+          similarComponents: similar.map((s) => ({
+            name: s.name,
+            similarity: s.similarity,
+          })),
         },
       });
     }
   }
 
-  const propFlows = buildPropFlows(componentMap, propPassingByFile, nameToFileMap);
-  const propUpwardFlows = buildPropUpwardFlows(componentMap, projectWideUsageMap, propPassingByFile);
+  const propFlows = buildPropFlows(
+    componentMap,
+    propPassingByFile,
+    nameToFileMap,
+  );
+  const propUpwardFlows = buildPropUpwardFlows(
+    componentMap,
+    projectWideUsageMap,
+    propPassingByFile,
+  );
 
   return {
     smells,
@@ -486,7 +507,7 @@ async function buildArchitectureAnalysis(
     similarComponents,
     propFlows,
     propUpwardFlows,
-    passThroughComponents: passThroughComponents.map(p => ({
+    passThroughComponents: passThroughComponents.map((p) => ({
       name: p.name,
       file: p.file,
       propsReceived: p.propsReceived,
@@ -500,7 +521,7 @@ async function buildArchitectureAnalysis(
 function buildPropFlows(
   componentMap: Map<string, ComponentInfo>,
   propPassingByFile: Map<string, PropPassingInfo[]>,
-  nameToFileMap: Map<string, string>
+  nameToFileMap: Map<string, string>,
 ): Record<string, PropFlowTree[]> {
   const result: Record<string, PropFlowTree[]> = {};
 
@@ -510,9 +531,15 @@ function buildPropFlows(
 
     for (const propInfo of comp.props) {
       const propName = propInfo.name;
-      
-      const origin = detectPropOrigin(comp, propName, propPassingByFile, nameToFileMap, componentMap);
-      
+
+      const origin = detectPropOrigin(
+        comp,
+        propName,
+        propPassingByFile,
+        nameToFileMap,
+        componentMap,
+      );
+
       const rootNode: PropFlowNode = {
         id: `${comp.name}.${propName}`,
         componentName: comp.name,
@@ -522,7 +549,15 @@ function buildPropFlows(
         children: [],
       };
 
-      buildPropTree(rootNode, propName, propPassing, propPassingByFile, nameToFileMap, file, 0);
+      buildPropTree(
+        rootNode,
+        propName,
+        propPassing,
+        propPassingByFile,
+        nameToFileMap,
+        file,
+        0,
+      );
 
       if (rootNode.children.length > 0 || origin.type !== "prop") {
         flows.push({
@@ -549,13 +584,13 @@ function buildPropTree(
   propPassingByFile: Map<string, PropPassingInfo[]>,
   nameToFileMap: Map<string, string>,
   parentFile: string,
-  depth: number
+  depth: number,
 ): void {
   if (depth > 3) return;
 
-  const childPasses = propPassing.filter(p => {
+  const childPasses = propPassing.filter((p) => {
     if (p.sourceType !== "prop" && p.sourceType !== "destructure") return false;
-    
+
     const source = p.sourcePropName || p.sourceExpression;
     const rootProp = source.split(".")[0];
     return rootProp === sourcePropName;
@@ -565,13 +600,17 @@ function buildPropTree(
     const childFile = nameToFileMap.get(childPass.componentName);
     const source = childPass.sourcePropName || childPass.sourceExpression;
     const isPropertyAccess = source.includes(".");
-    
+
     const childNode: PropFlowNode = {
       id: `${childPass.componentName}.${childPass.propName}`,
       componentName: childPass.componentName,
       file: childFile || "",
       propName: childPass.propName,
-      fullPath: isPropertyAccess ? source : (source !== childPass.propName ? `${source} → ${childPass.propName}` : source),
+      fullPath: isPropertyAccess
+        ? source
+        : source !== childPass.propName
+          ? `${source} → ${childPass.propName}`
+          : source,
       line: childPass.line,
       parentFile,
       children: [],
@@ -581,7 +620,15 @@ function buildPropTree(
 
     if (childFile && depth < 3) {
       const grandchildPassing = propPassingByFile.get(childFile) || [];
-      buildPropTree(childNode, childPass.propName, grandchildPassing, propPassingByFile, nameToFileMap, childFile, depth + 1);
+      buildPropTree(
+        childNode,
+        childPass.propName,
+        grandchildPassing,
+        propPassingByFile,
+        nameToFileMap,
+        childFile,
+        depth + 1,
+      );
     }
   }
 }
@@ -591,7 +638,7 @@ function detectPropOrigin(
   propName: string,
   propPassingByFile: Map<string, PropPassingInfo[]>,
   nameToFileMap: Map<string, string>,
-  componentMap: Map<string, ComponentInfo>
+  componentMap: Map<string, ComponentInfo>,
 ): PropOriginInfo {
   if (comp.serverQueries && comp.serverQueries.length > 0) {
     for (const query of comp.serverQueries) {
@@ -600,7 +647,7 @@ function detectPropOrigin(
       }
     }
   }
-  
+
   if (comp.hooks && comp.hooks.length > 0) {
     for (const hook of comp.hooks) {
       if (hook.toLowerCase().includes(propName.toLowerCase())) {
@@ -636,7 +683,7 @@ function buildComponentTree(
   targetPath: string,
   jsxUsageMap: Map<string, EnhancedJsxUsage>,
   nameToFileMap: Map<string, string>,
-  componentMap: Map<string, ComponentInfo>
+  componentMap: Map<string, ComponentInfo>,
 ): ComponentTreeNode[] {
   function getDirectJsxFromFile(file: string): string[] {
     const jsxUsage = jsxUsageMap.get(file);
@@ -687,7 +734,7 @@ function buildComponentTree(
 
   function getInferredChildrenForComponent(
     file: string,
-    componentName: string
+    componentName: string,
   ): string[] {
     const jsxUsage = jsxUsageMap.get(file);
     if (!jsxUsage) return [];
@@ -698,7 +745,7 @@ function buildComponentTree(
     file: string,
     callerJsxUsage: EnhancedJsxUsage | null,
     fromComponentName: string | null,
-    ancestorPath: Set<string>
+    ancestorPath: Set<string>,
   ): ComponentTreeNode {
     if (ancestorPath.has(file)) {
       return {
@@ -728,8 +775,8 @@ function buildComponentTree(
             childName,
             nestedInChild,
             callerJsxUsage,
-            currentPath
-          )
+            currentPath,
+          ),
         );
       }
     }
@@ -745,8 +792,8 @@ function buildComponentTree(
               childFile,
               fileJsxUsage || null,
               childName,
-              currentPath
-            )
+              currentPath,
+            ),
           );
         }
       }
@@ -755,14 +802,19 @@ function buildComponentTree(
     const allProjectComponents = getAllProjectComponentsFromFile(file);
     for (const childName of allProjectComponents) {
       const alreadyAdded = children.some(
-        (c) => c.component?.name === childName || c.file.includes(childName)
+        (c) => c.component?.name === childName || c.file.includes(childName),
       );
       if (alreadyAdded) continue;
 
       const childFile = nameToFileMap.get(childName);
       if (childFile && !currentPath.has(childFile)) {
         children.push(
-          buildFromFile(childFile, fileJsxUsage || null, childName, currentPath)
+          buildFromFile(
+            childFile,
+            fileJsxUsage || null,
+            childName,
+            currentPath,
+          ),
         );
       }
     }
@@ -775,7 +827,7 @@ function buildComponentTree(
     componentName: string,
     passedChildren: string[],
     callerJsxUsage: EnhancedJsxUsage | null,
-    ancestorPath: Set<string>
+    ancestorPath: Set<string>,
   ): ComponentTreeNode {
     if (ancestorPath.has(file)) {
       return {
@@ -800,8 +852,8 @@ function buildComponentTree(
             childName,
             nestedInChild,
             callerJsxUsage,
-            currentPath
-          )
+            currentPath,
+          ),
         );
       }
     }
@@ -817,8 +869,8 @@ function buildComponentTree(
               childFile,
               fileJsxUsage || null,
               childName,
-              currentPath
-            )
+              currentPath,
+            ),
           );
         }
       }
@@ -827,14 +879,19 @@ function buildComponentTree(
     const allProjectComponents = getAllProjectComponentsFromFile(file);
     for (const childName of allProjectComponents) {
       const alreadyAdded = children.some(
-        (c) => c.component?.name === childName || c.file.includes(childName)
+        (c) => c.component?.name === childName || c.file.includes(childName),
       );
       if (alreadyAdded) continue;
 
       const childFile = nameToFileMap.get(childName);
       if (childFile && !currentPath.has(childFile)) {
         children.push(
-          buildFromFile(childFile, fileJsxUsage || null, childName, currentPath)
+          buildFromFile(
+            childFile,
+            fileJsxUsage || null,
+            childName,
+            currentPath,
+          ),
         );
       }
     }
@@ -845,7 +902,7 @@ function buildComponentTree(
   const buildNode = (
     absPath: string,
     childSlot: ComponentTreeNode | null,
-    ancestorPath: Set<string>
+    ancestorPath: Set<string>,
   ): ComponentTreeNode => {
     const file = path.relative(targetPath, absPath);
     const node = buildFromFile(file, null, null, ancestorPath);
@@ -882,7 +939,7 @@ function buildComponentTree(
 }
 
 export async function analyzeFileTree(
-  targetPath: string
+  targetPath: string,
 ): Promise<FileTreeAnalysis> {
   const IGNORE = [
     "node_modules",
@@ -905,7 +962,7 @@ export async function analyzeFileTree(
 
   async function buildTree(
     dirPath: string,
-    relativeTo: string
+    relativeTo: string,
   ): Promise<FileNode> {
     const entries = await fs.readdir(dirPath, { withFileTypes: true });
     const children: FileNode[] = [];
@@ -942,7 +999,7 @@ export async function analyzeFileTree(
         ? a.type === "directory"
           ? -1
           : 1
-        : a.name.localeCompare(b.name)
+        : a.name.localeCompare(b.name),
     );
 
     return {
@@ -957,7 +1014,7 @@ export async function analyzeFileTree(
 }
 
 export async function analyzeApiRoutes(
-  targetPath: string
+  targetPath: string,
 ): Promise<ApiRouteAnalysis> {
   const routes: RouteInfo[] = [];
   const byMethod: Record<string, number> = {};
@@ -1053,7 +1110,7 @@ export async function analyzeApiRoutes(
 }
 
 export async function analyzeProject(
-  targetPath: string
+  targetPath: string,
 ): Promise<ProjectAnalysis> {
   const files = await glob("**/*.{tsx,jsx}", {
     cwd: targetPath,

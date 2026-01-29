@@ -1,5 +1,16 @@
 import type { RouteAnalysis } from "../types.js";
 import { OVERLAY_CSS, HIGHLIGHT_CSS } from "./styles.js";
+import {
+  buildFiberLookupByName,
+  collectStaticNames,
+  findNodeIdByFiber,
+  findNodeIdForFiber,
+  findInstanceIndexForFiber,
+  getNodeByPath,
+  isFiberDescendantOf,
+  mergeStaticWithFiber,
+  sortFiberLookupForMerge,
+} from "./runtime-logic.js";
 
 export function generateOverlayScript(data: RouteAnalysis): string {
   const treeJson = JSON.stringify(data.componentTree);
@@ -37,6 +48,9 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
   let selectedFiber = null;
   let selectedElement = null;
+
+  const expandedInstanceGroups = new Set();
+  const selectedInstanceByGroup = new Map();
 
   function getDomFromFiber(fiber) {
     if (!fiber) return null;
@@ -331,7 +345,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     if (!filterEnabled) return true;
     if (!allowlistLoaded) return true;
     if (componentAllowlist.has(name)) return true;
-    if (source?.fileName && source.fileName.includes('node_modules')) return false;
+    if (source?.fileName) return !source.fileName.includes('node_modules');
     return false;
   }
 
@@ -353,82 +367,31 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return result;
   }
 
-  function buildFiberLookupByName(fiberNodes, lookup = new Map()) {
-    for (const node of fiberNodes) {
-      if (node.name) {
-        if (!lookup.has(node.name)) lookup.set(node.name, []);
-        lookup.get(node.name).push(node);
-      }
-      if (node.children) buildFiberLookupByName(node.children, lookup);
-    }
-    return lookup;
-  }
-
-  function collectStaticNames(nodes, names = new Set()) {
+  function annotateFiberPositions(nodes) {
     for (const node of nodes) {
-      if (node.component?.name) names.add(node.component.name);
-      if (node.children) collectStaticNames(node.children, names);
+      const dom = getDomFromFiber(node.fiber);
+      const el = dom instanceof Element ? dom : dom?._elements?.[0];
+      if (el) {
+        const r = el.getBoundingClientRect();
+        node.__roY = r.top + window.scrollY;
+        node.__roX = r.left + window.scrollX;
+      }
+      if (node.children) annotateFiberPositions(node.children);
     }
-    return names;
   }
 
-  function mergeStaticWithFiber(staticNodes, fiberLookup, usedFibers = new Set(), staticNamesInTree = null) {
-    if (!staticNamesInTree) {
-      staticNamesInTree = collectStaticNames(staticNodes);
-    }
-    
-    return staticNodes.map(staticNode => {
-      const compName = staticNode.component?.name;
-      const isClientComponent = staticNode.component?.isClientComponent;
-      
-      if (staticNode.file === '{children}') {
-        return {
-          ...staticNode,
-          children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers, staticNamesInTree),
-          isSlot: true,
-        };
-      }
-      
-      let fiberMatch = null;
-      if (compName && fiberLookup.has(compName)) {
-        const candidates = fiberLookup.get(compName);
-        for (const candidate of candidates) {
-          if (!usedFibers.has(candidate)) {
-            fiberMatch = candidate;
-            usedFibers.add(candidate);
-            break;
-          }
-        }
-      }
-      
-      if (fiberMatch && isClientComponent) {
-        return {
-          file: staticNode.file,
-          component: staticNode.component,
-          source: fiberMatch.source || { fileName: staticNode.component?.filePath },
-          fiber: fiberMatch.fiber,
-          children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers, staticNamesInTree),
-          isBridge: true,
-          hasFiber: true,
-        };
-      }
-      
-      return {
-        file: staticNode.file,
-        component: staticNode.component,
-        source: staticNode.component?.filePath ? { fileName: staticNode.component.filePath } : null,
-        fiber: fiberMatch?.fiber || null,
-        children: mergeStaticWithFiber(staticNode.children || [], fiberLookup, usedFibers, staticNamesInTree),
-        isServerOnly: !fiberMatch && !isClientComponent,
-        hasFiber: !!fiberMatch,
-      };
-    });
-  }
+  ${buildFiberLookupByName.toString()}
+  ${sortFiberLookupForMerge.toString()}
+  ${collectStaticNames.toString()}
+  ${isFiberDescendantOf.toString()}
+  ${mergeStaticWithFiber.toString()}
 
   function refreshFiberTree() {
     FIBER_TREE = captureFullFiberTree();
     const filtered = filterEnabled ? filterFiberTree(FIBER_TREE) : FIBER_TREE;
+    annotateFiberPositions(filtered);
     const fiberLookup = buildFiberLookupByName(filtered);
+    sortFiberLookupForMerge(fiberLookup);
     
     TREE = mergeStaticWithFiber(JSON.parse(JSON.stringify(STATIC_TREE)), fiberLookup);
     
@@ -599,11 +562,23 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     if (!hook) return false;
 
     const orig = hook.onCommitFiberRoot;
+    let commitScanScheduled = false;
+    let pendingCommitRoot = null;
     hook.onCommitFiberRoot = function(rendererID, fiberRoot, ...args) {
       if (orig) orig.call(this, rendererID, fiberRoot, ...args);
-      try {
-        if (fiberRoot.current) findChangedFibers(fiberRoot.current, new Set());
-      } catch {}
+      if (isPaused) return;
+      pendingCommitRoot = fiberRoot?.current || null;
+      if (commitScanScheduled) return;
+      commitScanScheduled = true;
+      requestAnimationFrame(() => {
+        commitScanScheduled = false;
+        const root = pendingCommitRoot;
+        pendingCommitRoot = null;
+        if (!root || isPaused) return;
+        try {
+          findChangedFibers(root, new Set());
+        } catch {}
+      });
     };
     return true;
   }
@@ -821,7 +796,10 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     const result = [];
     for (const node of nodes) {
       const filePath = node.source?.fileName || node.file || node.component?.filePath || '';
-      if (isPathIgnored(filePath)) continue;
+      if (isPathIgnored(filePath)) {
+        result.push(...filterIgnoredNodes(node.children || []));
+        continue;
+      }
       result.push({
         ...node,
         children: filterIgnoredNodes(node.children || [])
@@ -971,6 +949,42 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   let sourceLoadingState = 'idle';
   let selectedProp = null;
   const sourceCache = new Map();
+  let scrollLockCount = 0;
+  let scrollLockState = null;
+
+  function lockPageScroll() {
+    scrollLockCount++;
+    if (scrollLockCount !== 1) return;
+    const y = window.scrollY || 0;
+    scrollLockState = {
+      y,
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverflow: document.body.style.overflow,
+      bodyPosition: document.body.style.position,
+      bodyTop: document.body.style.top,
+      bodyWidth: document.body.style.width,
+    };
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overflow = 'hidden';
+    document.body.style.position = 'fixed';
+    document.body.style.top = -y + 'px';
+    document.body.style.width = '100%';
+  }
+
+  function unlockPageScroll() {
+    if (scrollLockCount === 0) return;
+    scrollLockCount--;
+    if (scrollLockCount !== 0) return;
+    if (!scrollLockState) return;
+    document.documentElement.style.overflow = scrollLockState.htmlOverflow;
+    document.body.style.overflow = scrollLockState.bodyOverflow;
+    document.body.style.position = scrollLockState.bodyPosition;
+    document.body.style.top = scrollLockState.bodyTop;
+    document.body.style.width = scrollLockState.bodyWidth;
+    const y = scrollLockState.y || 0;
+    scrollLockState = null;
+    window.scrollTo(0, y);
+  }
 
   async function fetchSourceCode(filePath) {
     if (!filePath || filePath === 'unknown') return null;
@@ -1125,13 +1139,18 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       const name = comp?.name || '—';
       const renderCount = renderCounts.get(name) || 0;
       const matches = nodeMatchesSearch(node, searchTerm);
-      const childrenHtml = hasChildren ? '<div class="children">' + renderTree(node.children, depth + 1, nodeId) + '</div>' : '';
       const hasSource = rawFile !== 'unknown';
       
       const staticComp = name !== '—' ? staticComponentMap.get(name) : null;
       const isServerOnly = node.isServerOnly;
       const isBridge = node.isBridge;
       const hasFiber = node.hasFiber;
+      
+      const instanceCount = node.instances?.length || 0;
+      const hasInstances = instanceCount > 1;
+      const isExpanded = expandedInstanceGroups.has(nodeId);
+      const selectedIdx = selectedInstanceByGroup.get(nodeId) ?? -1;
+      
       const badges = [];
       
       if (staticComp?.nextjsFileType) {
@@ -1160,6 +1179,11 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       } else if (!staticComp?.isClientComponent && staticComp && !hasFiber) {
         badges.push('<span class="badge server" title="SERVER COMPONENT (green)&#10;&#10;This component renders on the server.&#10;&#10;• No \\'use client\\' directive&#10;• Executes during server render&#10;• May pass props to client children&#10;• Cannot use client-side hooks directly">SERVER</span>');
       }
+
+      if (hasInstances) {
+        const instanceBadge = '<span class="badge instance-count" data-group="' + nodeId + '" title="' + instanceCount + ' instances of this component. Click to ' + (isExpanded ? 'collapse' : 'expand') + '.">(x' + instanceCount + ')</span>';
+        badges.push(instanceBadge);
+      }
       
       const hooksCount = staticComp?.hooks?.length || 0;
       const hooksHtml = hooksCount > 0 ? '<span class="hooks" title="' + staticComp.hooks.join(', ') + '">⚡' + hooksCount + '</span>' : '';
@@ -1182,13 +1206,29 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       const renderCountHtml = isServerOnly 
         ? '<span class="render-count server-only" title="Server-rendered">—</span>'
         : '<span class="render-count" style="' + (renderCount === 0 ? 'opacity:0.3' : '') + '">' + renderCount + '</span>';
+
+      let instanceRowsHtml = '';
+      if (hasInstances && isExpanded) {
+        const maxToShow = Math.min(instanceCount, 200);
+        let rows = '';
+        for (let idx = 0; idx < maxToShow; idx++) {
+          const instId = nodeId + ':' + idx;
+          const isSelected = idx === selectedIdx;
+          rows += '<div class="instance-row' + (isSelected ? ' selected' : '') + '" data-instance-id="' + instId + '" data-group="' + nodeId + '" data-idx="' + idx + '"><span class="instance-label">' + name + ' (' + (idx + 1) + '/' + instanceCount + ')</span></div>';
+        }
+        if (instanceCount > 200) {
+          rows += '<div class="instance-row capped">...and ' + (instanceCount - 200) + ' more</div>';
+        }
+        instanceRowsHtml = '<div class="instance-list">' + rows + '</div>';
+      }
       
       const nodeClasses = ['node', matches ? '' : 'hidden', isServerOnly ? 'server-only' : '', isBridge ? 'bridge' : ''].filter(Boolean).join(' ');
+      const childrenHtml = hasChildren ? '<div class="children">' + renderTree(node.children, depth + 1, nodeId) + '</div>' : '';
 
       return \`
         <div class="\${nodeClasses}" data-depth="\${depth}" data-name="\${name}" data-file="\${rawFile}" data-id="\${nodeId}">
           <div class="node-header">
-            <span class="toggle">\${hasChildren ? '▼' : '•'}</span>
+            <span class="toggle">\${hasChildren || hasInstances ? '▼' : '•'}</span>
             <span class="name">\${name}</span>
             \${badgesHtml}
             \${propsHtml}
@@ -1198,6 +1238,7 @@ export function generateOverlayScript(data: RouteAnalysis): string {
             \${renderCountHtml}
             <span class="file \${hasSource ? 'has-source' : ''}" title="\${rawFile}">\${fileDisplay}</span>
           </div>
+          \${instanceRowsHtml}
           \${childrenHtml}
         </div>
       \`;
@@ -1457,7 +1498,42 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       header.addEventListener('click', e => {
         e.stopPropagation(); e.stopImmediatePropagation();
         if (e.target.classList.contains('toggle')) {
-          if (node.querySelector('.children')) node.classList.toggle('collapsed');
+          const nodeId = node.dataset.id;
+          const hasInstanceList = node.querySelector('.instance-list');
+          const hasChildren = node.querySelector('.children');
+          if (hasInstanceList || hasChildren) {
+            if (expandedInstanceGroups.has(nodeId)) {
+              expandedInstanceGroups.delete(nodeId);
+            }
+            node.classList.toggle('collapsed');
+            if (!node.classList.contains('collapsed') && !hasInstanceList) {
+              const treeNode = findNodeById(DISPLAY_TREE, nodeId);
+              if (treeNode?.instances?.length > 1) {
+                expandedInstanceGroups.add(nodeId);
+                const treeEl = shadow.querySelector('.tree');
+                const savedScroll = treeEl ? treeEl.scrollTop : 0;
+                renderPanel();
+                attachNodeEvents();
+                const newTreeEl = shadow.querySelector('.tree');
+                if (newTreeEl) newTreeEl.scrollTop = savedScroll;
+              }
+            }
+          }
+          return;
+        }
+        if (e.target.classList.contains('instance-count')) {
+          const nodeId = e.target.dataset.group;
+          if (expandedInstanceGroups.has(nodeId)) {
+            expandedInstanceGroups.delete(nodeId);
+          } else {
+            expandedInstanceGroups.add(nodeId);
+          }
+          const treeEl = shadow.querySelector('.tree');
+          const savedScroll = treeEl ? treeEl.scrollTop : 0;
+          renderPanel();
+          attachNodeEvents();
+          const newTreeEl = shadow.querySelector('.tree');
+          if (newTreeEl) newTreeEl.scrollTop = savedScroll;
           return;
         }
         if (e.target.classList.contains('info-btn')) {
@@ -1496,6 +1572,49 @@ export function generateOverlayScript(data: RouteAnalysis): string {
           const uri = 'cursor://file/' + filePath + ':' + lineNumber;
           window.open(uri);
         }
+      }, { capture: true });
+    });
+
+    shadow.querySelectorAll('.instance-row').forEach(row => {
+      if (row.classList.contains('capped')) return;
+      row.addEventListener('click', e => {
+        e.stopPropagation(); e.stopImmediatePropagation();
+        const groupId = row.dataset.group;
+        const idx = parseInt(row.dataset.idx, 10);
+        selectedInstanceByGroup.set(groupId, idx);
+        
+        shadow.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
+        row.classList.add('selected');
+
+        const treeNode = findNodeById(DISPLAY_TREE, groupId);
+        if (treeNode?.instances?.[idx]) {
+          const inst = treeNode.instances[idx];
+          const domEl = getDomFromFiber(inst.fiber);
+          const name = treeNode.component?.name || '—';
+          if (domEl) {
+            showSelectedHighlight(domEl, name + ' (' + (idx + 1) + ')');
+            const realEl = domEl instanceof Node ? domEl : domEl._elements?.[0];
+            if (realEl) realEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }
+      }, { capture: true });
+
+      row.addEventListener('mouseenter', e => {
+        e.stopPropagation();
+        const groupId = row.dataset.group;
+        const idx = parseInt(row.dataset.idx, 10);
+        const treeNode = findNodeById(DISPLAY_TREE, groupId);
+        if (treeNode?.instances?.[idx]) {
+          const inst = treeNode.instances[idx];
+          const domEl = getDomFromFiber(inst.fiber);
+          const name = treeNode.component?.name || '—';
+          if (domEl) showHoverHighlight(domEl, name + ' (' + (idx + 1) + ')');
+        }
+      }, { capture: true });
+
+      row.addEventListener('mouseleave', e => {
+        e.stopPropagation();
+        hideHoverHighlight();
       }, { capture: true });
     });
   }
@@ -1586,11 +1705,16 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       </div>
     \`;
 
+    const wasOpen = settingsOverlay.style.display === 'flex';
+    if (!wasOpen) lockPageScroll();
     settingsOverlay.style.display = 'flex';
   }
 
   function hideSettingsDialog() {
-    if (settingsOverlay) settingsOverlay.style.display = 'none';
+    if (!settingsOverlay) return;
+    const wasOpen = settingsOverlay.style.display === 'flex';
+    settingsOverlay.style.display = 'none';
+    if (wasOpen) unlockPageScroll();
   }
 
   function showDetailDialog(node, domEl) {
@@ -1689,13 +1813,18 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     }
 
     renderDetailContent();
+    const wasOpen = detailOverlay.style.display === 'flex';
+    if (!wasOpen) lockPageScroll();
     detailOverlay.style.display = 'flex';
   }
 
   function hideDetailDialog() {
-    if (detailOverlay) detailOverlay.style.display = 'none';
+    if (!detailOverlay) return;
+    const wasOpen = detailOverlay.style.display === 'flex';
+    detailOverlay.style.display = 'none';
     currentDetailNode = null;
     currentDetailDomEl = null;
+    if (wasOpen) unlockPageScroll();
   }
 
   function buildDataFlowGraph(node, domEl, liveProps, liveHooks) {
@@ -2697,13 +2826,25 @@ export function generateOverlayScript(data: RouteAnalysis): string {
 
   let inspectMoveHandler = null;
   let inspectClickHandler = null;
+  let inspectMoveRaf = 0;
+  let pendingInspectTarget = null;
 
   function enableInspectMode() {
     inspectMoveHandler = e => {
       if (isOverlayElement(e.target)) return;
-      const stack = getComponentStack(e.target);
-      const label = stack.length > 0 ? stack.slice(0, 3).join(' → ') : e.target.tagName.toLowerCase();
-      showHoverHighlight(e.target, label);
+      if (detailOverlay?.style?.display === 'flex') return;
+      if (settingsOverlay?.style?.display === 'flex') return;
+      pendingInspectTarget = e.target;
+      if (inspectMoveRaf) return;
+      inspectMoveRaf = requestAnimationFrame(() => {
+        inspectMoveRaf = 0;
+        const target = pendingInspectTarget;
+        pendingInspectTarget = null;
+        if (!target || isOverlayElement(target) || !document.contains(target)) return;
+        const stack = getComponentStack(target);
+        const label = stack.length > 0 ? stack.slice(0, 3).join(' → ') : target.tagName.toLowerCase();
+        showHoverHighlight(target, label);
+      });
     };
 
     inspectClickHandler = e => {
@@ -2719,12 +2860,62 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       console.log('%c🧩 Selected:', 'color: #d2a8ff; font-weight: bold', name || 'Unknown', domEl);
 
       if (name) {
+        const skip = new Set([
+          'Image',
+          'Link',
+          'LinkComponent',
+          'Icon',
+          'Typography',
+          'PreprocessedImage',
+          'TooltipTrigger',
+          'ScrollArea',
+          'ScrollAreaProvider',
+        ]);
+
+        const stack = getComponentStack(e.target);
+        let chosenName = null;
+        let selectedNodeId = null;
+        for (let i = 0; i < stack.length; i++) {
+          const target = stack[i];
+          if (!target || skip.has(target)) continue;
+          selectedNodeId = selectTreeNodeByStack(stack.slice(i));
+          if (selectedNodeId) {
+            chosenName = target;
+            break;
+          }
+        }
+
         selectedFiber = fiber;
         selectedElement = domEl;
 
-        const stack = getComponentStack(e.target);
-        const nodeId = selectTreeNodeByStack(stack);
-        showSelectedHighlight(domEl, name);
+        if (!chosenName) {
+          selectedNodeId = selectTreeNodeByStack(stack);
+        }
+
+        if (selectedNodeId && fiber) {
+          const treeNode = getNodeByPath(DISPLAY_TREE, selectedNodeId);
+          if (treeNode?.instances?.length > 1) {
+            const instIdx = findInstanceIndexForFiber(treeNode, fiber);
+            if (instIdx >= 0) {
+              if (!expandedInstanceGroups.has(selectedNodeId)) {
+                expandedInstanceGroups.add(selectedNodeId);
+              }
+              selectedInstanceByGroup.set(selectedNodeId, instIdx);
+              renderPanel();
+              attachNodeEvents();
+              
+              const instId = selectedNodeId + ':' + instIdx;
+              const instRow = shadow.querySelector('.instance-row[data-instance-id="' + instId + '"]');
+              if (instRow) {
+                shadow.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
+                instRow.classList.add('selected');
+                instRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              }
+            }
+          }
+        }
+
+        showSelectedHighlight(domEl, chosenName || name);
       }
     };
 
@@ -2735,9 +2926,17 @@ export function generateOverlayScript(data: RouteAnalysis): string {
   function disableInspectMode() {
     if (inspectMoveHandler) document.removeEventListener('mousemove', inspectMoveHandler);
     if (inspectClickHandler) document.removeEventListener('click', inspectClickHandler, true);
+    if (inspectMoveRaf) cancelAnimationFrame(inspectMoveRaf);
+    inspectMoveRaf = 0;
+    pendingInspectTarget = null;
     hideHoverHighlight();
     hideSelectedHighlight();
   }
+
+  ${findNodeIdByFiber.toString()}
+  ${findNodeIdForFiber.toString()}
+  ${findInstanceIndexForFiber.toString()}
+  ${getNodeByPath.toString()}
 
   function selectTreeNodeByStack(stack) {
     const result = findNodeByAncestry(DISPLAY_TREE, stack, '', []);

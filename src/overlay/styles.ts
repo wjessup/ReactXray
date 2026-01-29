@@ -226,6 +226,8 @@ export const OVERLAY_CSS = `
   .badge.server.rsc:hover { background: #2ea043; }
   .badge.nextjs { background: #8b5cf633; color: #d2a8ff; border: 1px solid #8b5cf644; }
   .badge.nextjs:hover { background: #8b5cf655; }
+  .badge.instance-count { background: #ffa65722; color: #ffa657; border: 1px solid #ffa65744; cursor: pointer; text-transform: none; }
+  .badge.instance-count:hover { background: #ffa65744; }
 
   .node.server-only > .node-header { border-left: 2px solid #7ee787; padding-left: 4px; }
   .node.bridge > .node-header { border-left: 2px solid #58a6ff; padding-left: 4px; }
@@ -305,6 +307,31 @@ export const OVERLAY_CSS = `
   }
 
   .children { padding-left: 10px; }
+
+  .instance-list {
+    padding-left: 12px;
+    border-left: 2px dashed #ffa657;
+    margin: 4px 0 4px 6px;
+  }
+
+  .instance-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 11px;
+    color: #8b949e;
+    transition: background 0.1s;
+  }
+
+  .instance-row:hover { background: #21262d; color: #c9d1d9; }
+  .instance-row.selected { background: #388bfd33; outline: 1px solid #58a6ff; color: #58a6ff; }
+  .instance-row.capped { color: #6e7681; font-style: italic; cursor: default; }
+  .instance-row.capped:hover { background: transparent; color: #6e7681; }
+
+  .instance-label { font-family: inherit; }
   
   .children-slot {
     border-left: 2px dashed #484f58;

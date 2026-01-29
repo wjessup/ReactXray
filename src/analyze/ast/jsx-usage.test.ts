@@ -265,7 +265,7 @@ describe("extractJsxUsage", () => {
     const usage = extractJsxUsage(sf);
     expect(usage.directChildren).toContain("Layout");
     expect(usage.nestedInComponent.get("Layout")).toContain(
-      "ToggleFilterPanel"
+      "ToggleFilterPanel",
     );
     expect(usage.nestedInComponent.get("Layout")).toContain("ResultsGrid");
 
@@ -274,7 +274,31 @@ describe("extractJsxUsage", () => {
     expect(panelChildren).toContain("ApplyButton");
 
     expect(usage.nestedInComponent.get("FilterSection")).toContain(
-      "FilterInput"
+      "FilterInput",
     );
+  });
+
+  it("detects self-closing components inside Link wrappers", () => {
+    const sf = parseJsx(`
+      function SpecimenCard({ data }: { data: any }) {
+        const specimenUrl = "/specimen/" + data.id;
+        return (
+          <div className="w-full">
+            <div className="flex flex-col">
+              <div className="relative">
+                <Link href={specimenUrl} className="block w-full">
+                  <SpecimenCardImage mainImage={data.mainImage} specimenName={data.name} />
+                </Link>
+              </div>
+              <Typography variant="body">{data.name}</Typography>
+              <SpecimenImpression viewedOn="card" specimen={data} />
+            </div>
+          </div>
+        );
+      }
+    `);
+    const usage = extractJsxUsage(sf);
+    const linkChildren = usage.nestedInComponent.get("Link");
+    expect(linkChildren).toContain("SpecimenCardImage");
   });
 });

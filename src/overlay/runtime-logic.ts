@@ -1,0 +1,219 @@
+export function buildFiberLookupByName(
+  fiberNodes: any[],
+  lookup = new Map<string, any[]>(),
+) {
+  for (const node of fiberNodes) {
+    if (node.name) {
+      if (!lookup.has(node.name)) lookup.set(node.name, []);
+      lookup.get(node.name)!.push(node);
+    }
+    if (node.children) buildFiberLookupByName(node.children, lookup);
+  }
+  return lookup;
+}
+
+export function sortFiberLookupForMerge(lookup: Map<string, any[]>) {
+  for (const candidates of lookup.values()) {
+    candidates.sort((a, b) => {
+      const ay = a?.__roY ?? null;
+      const by = b?.__roY ?? null;
+      if (ay === null || by === null) return 0;
+      if (ay !== by) return ay - by;
+      const ax = a?.__roX ?? 0;
+      const bx = b?.__roX ?? 0;
+      return ax - bx;
+    });
+  }
+  return lookup;
+}
+
+export function collectStaticNames(nodes: any[], names = new Set<string>()) {
+  for (const node of nodes) {
+    if (node.component?.name) names.add(node.component.name);
+    if (node.children) collectStaticNames(node.children, names);
+  }
+  return names;
+}
+
+export function isFiberDescendantOf(candidate: any, parentFiber: any): boolean {
+  let cur = candidate.fiber?.return;
+  const seen = new Set<any>();
+  while (cur && !seen.has(cur)) {
+    seen.add(cur);
+    if (cur === parentFiber) return true;
+    cur = cur.return;
+  }
+  return false;
+}
+
+export function mergeStaticWithFiber(
+  staticNodes: any[],
+  fiberLookup: Map<string, any[]>,
+  usedFibers = new Set<any>(),
+  staticNamesInTree: Set<string> | null = null,
+  parentFiber: any = null,
+): any[] {
+  if (!staticNamesInTree) {
+    staticNamesInTree = collectStaticNames(staticNodes);
+  }
+
+  return staticNodes.map((staticNode) => {
+    const compName = staticNode.component?.name;
+    const isClientComponent = staticNode.component?.isClientComponent;
+
+    if (staticNode.file === "{children}") {
+      return {
+        ...staticNode,
+        children: mergeStaticWithFiber(
+          staticNode.children || [],
+          fiberLookup,
+          usedFibers,
+          staticNamesInTree,
+          parentFiber,
+        ),
+        isSlot: true,
+      };
+    }
+
+    let instances: any[] = [];
+    let fiberMatch = null;
+
+    if (compName && fiberLookup.has(compName)) {
+      const candidates = fiberLookup.get(compName)!;
+
+      if (parentFiber) {
+        for (const candidate of candidates) {
+          if (usedFibers.has(candidate)) continue;
+          if (isFiberDescendantOf(candidate, parentFiber)) {
+            instances.push({
+              fiber: candidate.fiber,
+              source: candidate.source,
+            });
+            usedFibers.add(candidate);
+          }
+        }
+        if (instances.length > 0) {
+          fiberMatch = {
+            fiber: instances[0].fiber,
+            source: instances[0].source,
+          };
+        }
+      }
+
+      if (!fiberMatch) {
+        for (const candidate of candidates) {
+          if (!usedFibers.has(candidate)) {
+            fiberMatch = candidate;
+            usedFibers.add(candidate);
+            instances = [{ fiber: candidate.fiber, source: candidate.source }];
+            break;
+          }
+        }
+      }
+    }
+
+    const nextParentFiber = fiberMatch?.fiber || parentFiber;
+
+    if (fiberMatch && isClientComponent) {
+      return {
+        file: staticNode.file,
+        component: staticNode.component,
+        source: fiberMatch.source || {
+          fileName: staticNode.component?.filePath,
+        },
+        fiber: fiberMatch.fiber,
+        instances: instances.length > 1 ? instances : undefined,
+        children: mergeStaticWithFiber(
+          staticNode.children || [],
+          fiberLookup,
+          usedFibers,
+          staticNamesInTree,
+          nextParentFiber,
+        ),
+        isBridge: true,
+        hasFiber: true,
+      };
+    }
+
+    return {
+      file: staticNode.file,
+      component: staticNode.component,
+      source: staticNode.component?.filePath
+        ? { fileName: staticNode.component.filePath }
+        : null,
+      fiber: fiberMatch?.fiber || null,
+      instances: instances.length > 1 ? instances : undefined,
+      children: mergeStaticWithFiber(
+        staticNode.children || [],
+        fiberLookup,
+        usedFibers,
+        staticNamesInTree,
+        nextParentFiber,
+      ),
+      isServerOnly: !fiberMatch && !isClientComponent,
+      hasFiber: !!fiberMatch,
+    };
+  });
+}
+
+export function findNodeIdByFiber(
+  nodes: any[],
+  fiber: any,
+  prefix = "",
+): string | null {
+  for (let i = 0; i < nodes.length; i++) {
+    const nodeId = prefix ? prefix + "-" + i : String(i);
+    const node = nodes[i];
+    if (node?.fiber === fiber) return nodeId;
+    if (node?.children?.length) {
+      const found = findNodeIdByFiber(node.children, fiber, nodeId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function findNodeIdForFiber(
+  displayTree: any[],
+  fiber: any,
+): string | null {
+  let current = fiber;
+  const seen = new Set<any>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const id = findNodeIdByFiber(displayTree, current);
+    if (id) return id;
+    current = current.return;
+  }
+  return null;
+}
+
+export function findInstanceIndexForFiber(
+  node: any,
+  clickedFiber: any,
+): number {
+  if (!node?.instances || node.instances.length <= 1) return -1;
+  let current = clickedFiber;
+  const seen = new Set<any>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    for (let i = 0; i < node.instances.length; i++) {
+      if (node.instances[i].fiber === current) return i;
+    }
+    current = current.return;
+  }
+  return -1;
+}
+
+export function getNodeByPath(tree: any[], path: string): any | null {
+  if (!path) return null;
+  const parts = path.split("-").map(Number);
+  let current = tree;
+  let node = null;
+  for (const idx of parts) {
+    if (!current || idx >= current.length) return null;
+    node = current[idx];
+    current = node.children || [];
+  }
+  return node;
+}

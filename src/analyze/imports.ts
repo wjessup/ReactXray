@@ -63,7 +63,7 @@ export function buildImportGraph(
   project: Project,
   entryPaths: string[],
   targetPath: string,
-  maxFiles: number = 300
+  maxFiles: number = 1000
 ): { visited: Set<string>; graph: Map<string, string[]> } {
   const visited = new Set<string>();
   const graph = new Map<string, string[]>();
