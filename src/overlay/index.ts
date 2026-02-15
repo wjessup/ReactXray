@@ -492,6 +492,14 @@ export function generateOverlayScript(data: RouteAnalysis): string {
     return nodes.reduce((acc, n) => acc + 1 + countNodes(n.children), 0);
   }
 
+  function hasAnyFiberDescendant(node) {
+    if (node.hasFiber || node.isBridge) return true;
+    for (const child of (node.children || [])) {
+      if (hasAnyFiberDescendant(child)) return true;
+    }
+    return false;
+  }
+
   function isOverlayFiber(fiber) {
     if (!fiber) return false;
     let node = fiber.stateNode;
@@ -1183,6 +1191,17 @@ export function generateOverlayScript(data: RouteAnalysis): string {
       if (hasInstances) {
         const instanceBadge = '<span class="badge instance-count" data-group="' + nodeId + '" title="' + instanceCount + ' instances of this component. Click to ' + (isExpanded ? 'collapse' : 'expand') + '.">(x' + instanceCount + ')</span>';
         badges.push(instanceBadge);
+      }
+      
+      if (node.renderCondition) {
+        const cond = node.renderCondition;
+        const isActive = hasFiber || hasAnyFiberDescendant(node);
+        const activeLabel = isActive ? ' ACTIVE' : ' INACTIVE';
+        const activeClass = isActive ? ' condition-active' : ' condition-inactive';
+        const condBadge = cond.branch === 'true'
+          ? '<span class="badge condition-true' + activeClass + '" title="Renders when: ' + escapeHtml(cond.expression) + '&#10;&#10;' + (isActive ? 'Currently ACTIVE - condition is truthy' : 'Currently INACTIVE - condition is falsy') + '">✓ ' + escapeHtml(cond.expression) + activeLabel + '</span>'
+          : '<span class="badge condition-false' + activeClass + '" title="Renders when NOT: ' + escapeHtml(cond.expression) + '&#10;&#10;' + (isActive ? 'Currently ACTIVE - condition is falsy' : 'Currently INACTIVE - condition is truthy') + '">✗ ' + escapeHtml(cond.expression) + activeLabel + '</span>';
+        badges.push(condBadge);
       }
       
       const hooksCount = staticComp?.hooks?.length || 0;

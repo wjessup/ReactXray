@@ -78,10 +78,16 @@ export interface ComponentInfo {
   nextjsFileType: NextjsFileType;
 }
 
+export interface RenderCondition {
+  expression: string;
+  branch: "true" | "false";
+}
+
 export interface ComponentTreeNode {
   file: string;
   component: ComponentInfo | null;
   children: ComponentTreeNode[];
+  renderCondition?: RenderCondition;
 }
 
 export interface RouteEntryFiles {

@@ -132,6 +132,7 @@ export function mergeStaticWithFiber(
         ),
         isBridge: true,
         hasFiber: true,
+        renderCondition: staticNode.renderCondition,
       };
     }
 
@@ -152,6 +153,7 @@ export function mergeStaticWithFiber(
       ),
       isServerOnly: !fiberMatch && !isClientComponent,
       hasFiber: !!fiberMatch,
+      renderCondition: staticNode.renderCondition,
     };
   });
 }

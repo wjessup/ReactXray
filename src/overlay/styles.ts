@@ -225,6 +225,13 @@ export const OVERLAY_CSS = `
   .badge.server.rsc { background: #238636; color: #0d1117; font-weight: 700; border: 1px solid #238636; text-transform: none; }
   .badge.server.rsc:hover { background: #2ea043; }
   .badge.nextjs { background: #8b5cf633; color: #d2a8ff; border: 1px solid #8b5cf644; }
+  .badge.condition-true { background: #f59e0b33; color: #fbbf24; border: 1px solid #f59e0b44; font-family: monospace; font-size: 9px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge.condition-true:hover { background: #f59e0b55; max-width: none; }
+  .badge.condition-false { background: #f5910b33; color: #fb923c; border: 1px dashed #f59e0b44; font-family: monospace; font-size: 9px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge.condition-false:hover { background: #f5910b55; max-width: none; }
+  .badge.condition-active { background: #22c55e; color: #0d1117; font-weight: 700; border: 1px solid #22c55e; }
+  .badge.condition-active:hover { background: #4ade80; }
+  .badge.condition-inactive { opacity: 0.4; }
   .badge.nextjs:hover { background: #8b5cf655; }
   .badge.instance-count { background: #ffa65722; color: #ffa657; border: 1px solid #ffa65744; cursor: pointer; text-transform: none; }
   .badge.instance-count:hover { background: #ffa65744; }

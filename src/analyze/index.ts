@@ -741,6 +741,24 @@ function buildComponentTree(
     return jsxUsage.inferredInComponent.get(componentName) || [];
   }
 
+  function getRenderCondition(
+    file: string,
+    parentComponentName: string | null,
+    childName: string,
+  ): ComponentTreeNode["renderCondition"] {
+    const jsxUsage = jsxUsageMap.get(file);
+    if (!jsxUsage?.conditionalChildren) return undefined;
+    
+    const key = parentComponentName || "__direct__";
+    const conditions = jsxUsage.conditionalChildren.get(key);
+    if (!conditions) return undefined;
+    
+    const match = conditions.find((c) => c.component === childName);
+    if (!match) return undefined;
+    
+    return { expression: match.expression, branch: match.branch };
+  }
+
   function buildFromFile(
     file: string,
     callerJsxUsage: EnhancedJsxUsage | null,
@@ -808,14 +826,19 @@ function buildComponentTree(
 
       const childFile = nameToFileMap.get(childName);
       if (childFile && !currentPath.has(childFile)) {
-        children.push(
-          buildFromFile(
-            childFile,
-            fileJsxUsage || null,
-            childName,
-            currentPath,
-          ),
+        const childNode = buildFromFile(
+          childFile,
+          fileJsxUsage || null,
+          childName,
+          currentPath,
         );
+        
+        const condition = getRenderCondition(file, null, childName);
+        if (condition) {
+          childNode.renderCondition = condition;
+        }
+        
+        children.push(childNode);
       }
     }
 
@@ -885,14 +908,19 @@ function buildComponentTree(
 
       const childFile = nameToFileMap.get(childName);
       if (childFile && !currentPath.has(childFile)) {
-        children.push(
-          buildFromFile(
-            childFile,
-            fileJsxUsage || null,
-            childName,
-            currentPath,
-          ),
+        const childNode = buildFromFile(
+          childFile,
+          fileJsxUsage || null,
+          childName,
+          currentPath,
         );
+        
+        const condition = getRenderCondition(file, null, childName);
+        if (condition) {
+          childNode.renderCondition = condition;
+        }
+        
+        children.push(childNode);
       }
     }
 

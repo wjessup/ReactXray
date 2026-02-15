@@ -1,19 +1,32 @@
 import { Node, SourceFile } from "ts-morph";
 import { getJsxTagName } from "./helpers.js";
 
+export interface ConditionalChild {
+  component: string;
+  expression: string;
+  branch: "true" | "false";
+}
+
 export interface JsxUsage {
   directChildren: string[];
   nestedInComponent: Map<string, string[]>;
   identifiersInComponent: Map<string, string[]>;
+  conditionalChildren: Map<string, ConditionalChild[]>;
+}
+
+interface ConditionalContext {
+  expression: string;
+  branch: "true" | "false";
 }
 
 export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
   const directChildren = new Set<string>();
   const nestedInComponent = new Map<string, Set<string>>();
   const identifiersInComponent = new Map<string, Set<string>>();
+  const conditionalChildren = new Map<string, ConditionalChild[]>();
   const processedNodes = new WeakSet<Node>();
 
-  function addChild(parentName: string | null, childName: string) {
+  function addChild(parentName: string | null, childName: string, condition: ConditionalContext | null) {
     if (parentName) {
       if (!nestedInComponent.has(parentName)) {
         nestedInComponent.set(parentName, new Set());
@@ -21,6 +34,18 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
       nestedInComponent.get(parentName)!.add(childName);
     } else {
       directChildren.add(childName);
+    }
+    
+    if (condition && /^[A-Z]/.test(childName)) {
+      const key = parentName || "__direct__";
+      if (!conditionalChildren.has(key)) {
+        conditionalChildren.set(key, []);
+      }
+      conditionalChildren.get(key)!.push({
+        component: childName,
+        expression: condition.expression,
+        branch: condition.branch,
+      });
     }
   }
 
@@ -41,7 +66,8 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
   function processJsxTree(
     node: Node,
     parentComponentName: string | null,
-    nearestCustomComponent: string | null
+    nearestCustomComponent: string | null,
+    condition: ConditionalContext | null = null
   ) {
     if (processedNodes.has(node)) return;
     processedNodes.add(node);
@@ -49,7 +75,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
     const tagName = getJsxTagName(node);
 
     if (tagName) {
-      addChild(parentComponentName, tagName);
+      addChild(parentComponentName, tagName, condition);
 
       const newNearestCustom = isCustomComponent(tagName)
         ? tagName
@@ -58,7 +84,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
       if (Node.isJsxElement(node)) {
         const nextParent = isCustomComponent(tagName) ? tagName : parentComponentName;
         for (const child of node.getJsxChildren()) {
-          processJsxTree(child, nextParent, newNearestCustom);
+          processJsxTree(child, nextParent, newNearestCustom, null);
         }
       }
 
@@ -72,13 +98,13 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
         if (Node.isJsxAttribute(attr)) {
           const init = attr.getInitializer();
           if (init) {
-            processJsxTree(init, tagName, newNearestCustom);
+            processJsxTree(init, tagName, newNearestCustom, null);
           }
         }
       }
     } else if (Node.isJsxFragment(node)) {
       for (const child of node.getJsxChildren()) {
-        processJsxTree(child, parentComponentName, nearestCustomComponent);
+        processJsxTree(child, parentComponentName, nearestCustomComponent, condition);
       }
     } else if (Node.isJsxExpression(node)) {
       const expr = node.getExpression();
@@ -89,7 +115,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
             : nearestCustomComponent;
           addIdentifier(target, expr.getText());
         }
-        processJsxTree(expr, parentComponentName, nearestCustomComponent);
+        processJsxTree(expr, parentComponentName, nearestCustomComponent, condition);
       }
     } else if (Node.isIdentifier(node)) {
       const target = isCustomComponent(parentComponentName)
@@ -99,31 +125,38 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
     } else if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
       const body = Node.isArrowFunction(node) ? node.getBody() : node.getBody();
       if (body) {
-        processJsxTree(body, parentComponentName, nearestCustomComponent);
+        processJsxTree(body, parentComponentName, nearestCustomComponent, condition);
       }
     } else if (Node.isParenthesizedExpression(node)) {
-      processJsxTree(node.getExpression(), parentComponentName, nearestCustomComponent);
+      processJsxTree(node.getExpression(), parentComponentName, nearestCustomComponent, condition);
     } else if (Node.isConditionalExpression(node)) {
-      processJsxTree(node.getWhenTrue(), parentComponentName, nearestCustomComponent);
-      processJsxTree(node.getWhenFalse(), parentComponentName, nearestCustomComponent);
+      const conditionExpr = node.getCondition().getText();
+      processJsxTree(node.getWhenTrue(), parentComponentName, nearestCustomComponent, { expression: conditionExpr, branch: "true" });
+      processJsxTree(node.getWhenFalse(), parentComponentName, nearestCustomComponent, { expression: conditionExpr, branch: "false" });
     } else if (Node.isBinaryExpression(node)) {
-      processJsxTree(node.getRight(), parentComponentName, nearestCustomComponent);
+      const operator = node.getOperatorToken().getText();
+      if (operator === "&&") {
+        const conditionExpr = node.getLeft().getText();
+        processJsxTree(node.getRight(), parentComponentName, nearestCustomComponent, { expression: conditionExpr, branch: "true" });
+      } else {
+        processJsxTree(node.getRight(), parentComponentName, nearestCustomComponent, condition);
+      }
     } else if (Node.isCallExpression(node)) {
       for (const arg of node.getArguments()) {
-        processJsxTree(arg, parentComponentName, nearestCustomComponent);
+        processJsxTree(arg, parentComponentName, nearestCustomComponent, condition);
       }
     } else if (Node.isBlock(node)) {
       for (const stmt of node.getStatements()) {
         if (Node.isReturnStatement(stmt)) {
           const expr = stmt.getExpression();
           if (expr) {
-            processJsxTree(expr, parentComponentName, nearestCustomComponent);
+            processJsxTree(expr, parentComponentName, nearestCustomComponent, condition);
           }
         }
       }
     } else {
       node.forEachChild((child) =>
-        processJsxTree(child, parentComponentName, nearestCustomComponent)
+        processJsxTree(child, parentComponentName, nearestCustomComponent, condition)
       );
     }
   }
@@ -154,6 +187,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
     directChildren: Array.from(directChildren),
     nestedInComponent: new Map(),
     identifiersInComponent: new Map(),
+    conditionalChildren,
   };
 
   for (const [parent, children] of nestedInComponent) {

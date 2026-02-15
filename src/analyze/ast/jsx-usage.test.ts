@@ -301,4 +301,76 @@ describe("extractJsxUsage", () => {
     const linkChildren = usage.nestedInComponent.get("Link");
     expect(linkChildren).toContain("SpecimenCardImage");
   });
+
+  it("tracks conditional children with their branches in ternary", () => {
+    const sf = parseJsx(`
+      function HeaderWithAuth() {
+        const authResult = await authenticate();
+        return (
+          <header>
+            {authResult ? <AuthenticatedNav /> : <UnauthenticatedNav />}
+          </header>
+        );
+      }
+    `);
+    const usage = extractJsxUsage(sf);
+    const directConditions = usage.conditionalChildren.get("__direct__");
+    expect(directConditions).toBeDefined();
+    
+    const authNav = directConditions?.find(c => c.component === "AuthenticatedNav");
+    expect(authNav).toBeDefined();
+    expect(authNav?.expression).toBe("authResult");
+    expect(authNav?.branch).toBe("true");
+    
+    const unauthNav = directConditions?.find(c => c.component === "UnauthenticatedNav");
+    expect(unauthNav).toBeDefined();
+    expect(unauthNav?.expression).toBe("authResult");
+    expect(unauthNav?.branch).toBe("false");
+  });
+
+  it("tracks conditional children with AND expressions", () => {
+    const sf = parseJsx(`
+      function Page() {
+        return (
+          <Container>
+            {isLoading && <Spinner />}
+            {hasError && <ErrorBanner />}
+          </Container>
+        );
+      }
+    `);
+    const usage = extractJsxUsage(sf);
+    const containerConditions = usage.conditionalChildren.get("Container");
+    expect(containerConditions).toBeDefined();
+    
+    const spinner = containerConditions?.find(c => c.component === "Spinner");
+    expect(spinner).toBeDefined();
+    expect(spinner?.expression).toBe("isLoading");
+    expect(spinner?.branch).toBe("true");
+    
+    const error = containerConditions?.find(c => c.component === "ErrorBanner");
+    expect(error).toBeDefined();
+    expect(error?.expression).toBe("hasError");
+    expect(error?.branch).toBe("true");
+  });
+
+  it("tracks nested ternary inside component", () => {
+    const sf = parseJsx(`
+      function Card() {
+        return (
+          <CardWrapper>
+            {status === "loading" ? <LoadingState /> : <ContentState />}
+          </CardWrapper>
+        );
+      }
+    `);
+    const usage = extractJsxUsage(sf);
+    const wrapperConditions = usage.conditionalChildren.get("CardWrapper");
+    expect(wrapperConditions).toBeDefined();
+    expect(wrapperConditions?.length).toBe(2);
+    
+    const loading = wrapperConditions?.find(c => c.component === "LoadingState");
+    expect(loading?.branch).toBe("true");
+    expect(loading?.expression).toBe('status === "loading"');
+  });
 });
