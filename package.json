@@ -19,6 +19,7 @@
     "serve:watch": "tsx watch src/cli.ts serve",
     "component-prop": "tsx src/cli.ts component-prop",
     "mcp": "tsx src/mcp.ts",
+    "deps": "tsx src/cli.ts analyze --only deps",
     "debug": "tsx src/cli.ts debug",
     "verify": "tsx src/verify-tree.ts"
   },

@@ -8,6 +8,7 @@ import {
   analyzeFileTree,
   analyzeApiRoutes,
   analyzeProject,
+  analyzeScreenDeps,
 } from "./analyze/index.js";
 import type { ComponentTreeNode } from "./types.js";
 import { generateOverlayScript, generateBookmarklet } from "./overlay/index.js";
@@ -30,7 +31,7 @@ program
   .description("Analyze a target project directory")
   .argument("<target>", "Path to the project to analyze")
   .option("-o, --out <dir>", "Output directory for artifacts", defaultOutput)
-  .option("--only <analyzers>", "Run only specific analyzers (comma-separated: tree,components,routes)")
+  .option("--only <analyzers>", "Run only specific analyzers (comma-separated: tree,components,routes,deps)")
   .action(async (target: string, options: { out: string; only?: string }) => {
     const targetPath = path.resolve(target);
     const outputPath = path.resolve(options.out);
@@ -42,7 +43,7 @@ program
 
     await fs.mkdir(outputPath, { recursive: true });
 
-    const analyzers = options.only?.split(",") ?? ["tree", "components", "routes"];
+    const analyzers = options.only?.split(",") ?? ["tree", "components", "routes", "deps"];
 
     console.log(`\nAnalyzing: ${targetPath}`);
     console.log(`Output to: ${outputPath}\n`);
@@ -68,6 +69,13 @@ program
           const routes = await analyzeApiRoutes(targetPath);
           await fs.writeFile(path.join(outputPath, "routes.json"), JSON.stringify(routes, null, 2));
           console.log("  ✓ routes.json");
+          break;
+
+        case "deps":
+          console.log("Running screen dependency analysis...");
+          const deps = await analyzeScreenDeps(targetPath);
+          await fs.writeFile(path.join(outputPath, "screen-deps.json"), JSON.stringify(deps, null, 2));
+          console.log(`  ✓ screen-deps.json (${deps.stats.totalScreens} screens, ${deps.stats.totalSharedComponents} shared components)`);
           break;
 
         default:

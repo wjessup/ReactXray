@@ -18,6 +18,10 @@ import type {
   PropFlowTree,
   PropFlowNode,
   PropOriginInfo,
+  ScreenDepsAnalysis,
+  ScreenDeps,
+  ScreenComponentRef,
+  SharedComponentEntry,
 } from "../types.js";
 import {
   extractComponentFromFile,
@@ -1175,6 +1179,124 @@ export async function analyzeProject(
       clientComponents: components.filter((c) => c.isClientComponent).length,
       serverComponents: components.filter((c) => c.isServerComponent).length,
       hookUsage,
+    },
+  };
+}
+
+export async function analyzeScreenDeps(
+  targetPath: string,
+): Promise<ScreenDepsAnalysis> {
+  const appDirs = ["app", "src/app"];
+  let appDir: string | null = null;
+
+  for (const dir of appDirs) {
+    const fullDir = path.join(targetPath, dir);
+    if (await fileExists(fullDir)) {
+      appDir = fullDir;
+      break;
+    }
+  }
+
+  if (!appDir) {
+    return {
+      screens: [],
+      sharedComponents: [],
+      stats: {
+        totalScreens: 0,
+        totalUniqueComponents: 0,
+        totalSharedComponents: 0,
+      },
+    };
+  }
+
+  const pageFiles = await glob("**/page.{tsx,jsx,ts,js}", {
+    cwd: appDir,
+    ignore: ["node_modules/**", ".next/**"],
+    absolute: false,
+  });
+
+  const tsConfigPath = path.join(targetPath, "tsconfig.json");
+  const hasTsConfig = await fileExists(tsConfigPath);
+
+  const project = new Project({
+    tsConfigFilePath: hasTsConfig ? tsConfigPath : undefined,
+    compilerOptions: { allowJs: true, jsx: 2 },
+    skipAddingFilesFromTsConfig: true,
+  });
+
+  const screenRoute = (pagePath: string): string => {
+    const route = pagePath
+      .replace(/\/page\.(tsx|jsx|ts|js)$/, "")
+      .replace(/\([\w-]+\)\//g, "");
+    return `/${route}` || "/";
+  };
+
+  const componentToScreens = new Map<string, Set<string>>();
+  const componentFileMap = new Map<string, string>();
+  const screens: ScreenDeps[] = [];
+
+  for (const pageFile of pageFiles) {
+    const absPagePath = path.join(appDir, pageFile);
+    const route = screenRoute(pageFile);
+
+    project.addSourceFileAtPath(absPagePath);
+
+    const { visited } = buildImportGraph(project, [absPagePath], targetPath);
+
+    const screenComponents: ScreenComponentRef[] = [];
+
+    for (const absPath of visited) {
+      if (!absPath.endsWith(".tsx") && !absPath.endsWith(".jsx")) continue;
+
+      const sourceFile = project.getSourceFile(absPath);
+      if (!sourceFile) continue;
+
+      const relPath = path.relative(targetPath, absPath);
+      const info = extractComponentFromFile(sourceFile, relPath);
+      if (!info) continue;
+
+      screenComponents.push({ name: info.name, filePath: relPath });
+
+      if (!componentFileMap.has(info.name)) {
+        componentFileMap.set(info.name, relPath);
+      }
+
+      const existing = componentToScreens.get(info.name) ?? new Set<string>();
+      existing.add(route);
+      componentToScreens.set(info.name, existing);
+    }
+
+    screens.push({
+      screen: route,
+      pagePath: path.relative(targetPath, absPagePath),
+      components: screenComponents,
+    });
+  }
+
+  const sharedComponents: SharedComponentEntry[] = [];
+  for (const [name, screenSet] of componentToScreens) {
+    if (screenSet.size < 2) continue;
+
+    const filePath = componentFileMap.get(name) ?? "";
+    const usedByScreens = [...screenSet].sort();
+
+    sharedComponents.push({
+      name,
+      filePath,
+      usedByScreens,
+      usageCount: usedByScreens.length,
+    });
+  }
+
+  sharedComponents.sort((a, b) => b.usageCount - a.usageCount);
+
+  return {
+    screens: screens.sort((a, b) => a.screen.localeCompare(b.screen)),
+    sharedComponents,
+    stats: {
+      totalScreens: screens.length,
+      totalUniqueComponents: componentFileMap.size,
+      totalSharedComponents: sharedComponents.length,
     },
   };
 }
