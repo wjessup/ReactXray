@@ -1,4 +1,4 @@
-import { Project, SourceFile } from "ts-morph";
+import { Project, SourceFile, Node } from "ts-morph";
 import path from "path";
 import fs from "fs";
 import type { ProjectJsxExports, ResolvedJsxImport } from "../types.js";
@@ -38,6 +38,83 @@ export function getFileImports(sourceFile: SourceFile, targetPath: string): stri
   const filePath = sourceFile.getFilePath();
 
   for (const decl of sourceFile.getImportDeclarations()) {
+    // Skip explicit type-only imports
+    if (decl.isTypeOnly()) continue;
+
+    const namedImports = decl.getNamedImports();
+    const defaultImport = decl.getDefaultImport();
+    const namespaceImport = decl.getNamespaceImport();
+
+    // Strategy: If every imported item resolves to a Type/Interface, treat the whole import as type-only.
+    // This handles cases like `import { ManageRouter }` where ManageRouter is an `export type`.
+    
+    // We only apply this check if there are no side-effect imports (which have no named/default/namespace).
+    // If namedImports is empty and no default/namespace, it might be `import "side-effect"`.
+    const isSideEffect = namedImports.length === 0 && !defaultImport && !namespaceImport;
+
+    if (!isSideEffect) {
+      let allAreTypes = true;
+      const resolvedSourceFile = decl.getModuleSpecifierSourceFile();
+
+      if (resolvedSourceFile) {
+        // Check named imports
+        if (namedImports.length > 0) {
+          for (const named of namedImports) {
+            if (named.isTypeOnly()) continue;
+
+            const importText = named.getText();
+            const exportName = importText.includes(" as ") 
+              ? importText.split(" as ")[0].trim() 
+              : named.getNameNode().getText();
+            const exportedDecls = resolvedSourceFile.getExportedDeclarations().get(exportName);
+            
+            if (!exportedDecls || exportedDecls.length === 0) {
+              // Can't find export, safe default to "value"
+              allAreTypes = false;
+              break;
+            }
+
+            const isType = exportedDecls.every(d => 
+              Node.isTypeAliasDeclaration(d) || 
+              Node.isInterfaceDeclaration(d)
+            );
+
+            if (!isType) {
+              allAreTypes = false;
+              break;
+            }
+          }
+        }
+
+        // Check default import
+        if (allAreTypes && defaultImport) {
+             const exportedDecls = resolvedSourceFile.getExportedDeclarations().get("default");
+             if (!exportedDecls || exportedDecls.length === 0) {
+               allAreTypes = false;
+             } else {
+               const isType = exportedDecls.every(d => 
+                 Node.isTypeAliasDeclaration(d) || 
+                 Node.isInterfaceDeclaration(d)
+               );
+               if (!isType) allAreTypes = false;
+             }
+        }
+        
+        // Namespace import (import * as ns) is generally used for values, but could be for types.
+        // It's harder to check because `ns` contains everything.
+        // We'll assume namespace import is a value dependency for now unless it's `import type *`.
+        if (namespaceImport && !decl.isTypeOnly()) {
+            allAreTypes = false;
+        }
+
+      } else {
+        // Could not resolve source file -> assume value dependency
+        allAreTypes = false;
+      }
+
+      if (allAreTypes) continue;
+    }
+
     const specifier = decl.getModuleSpecifierValue();
     if (specifier.startsWith(".") || specifier.startsWith("@/")) {
       let resolved = decl.getModuleSpecifierSourceFile();

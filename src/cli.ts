@@ -14,6 +14,8 @@ import type { ComponentTreeNode } from "./types.js";
 import { generateOverlayScript, generateBookmarklet } from "./overlay/index.js";
 import { generateHtml } from "./visualize.js";
 import { startServer } from "./server.js";
+import { splitDeps } from "./dependencies/split-deps.js";
+import { generateReport } from "./dependencies/generate-report.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -74,8 +76,15 @@ program
         case "deps":
           console.log("Running screen dependency analysis...");
           const deps = await analyzeScreenDeps(targetPath);
-          await fs.writeFile(path.join(outputPath, "screen-deps.json"), JSON.stringify(deps, null, 2));
+          const depsFile = path.join(outputPath, "screen-deps.json");
+          await fs.writeFile(depsFile, JSON.stringify(deps, null, 2));
           console.log(`  ✓ screen-deps.json (${deps.stats.totalScreens} screens, ${deps.stats.totalSharedComponents} shared components)`);
+          
+          console.log("Splitting dependencies...");
+          await splitDeps(depsFile);
+          
+          console.log("Generating report...");
+          await generateReport(depsFile);
           break;
 
         default:
