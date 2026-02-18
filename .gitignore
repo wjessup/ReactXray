@@ -5,3 +5,4 @@
 .pnpm-store
 /debug
 .launch-command.txt
+.idea

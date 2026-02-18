@@ -292,3 +292,31 @@ export interface ArchitectureAnalysis {
     renames: Record<string, string>;
   }[];
 }
+
+export interface ScreenComponentRef {
+  name: string;
+  filePath: string;
+}
+
+export interface ScreenDeps {
+  screen: string;
+  pagePath: string;
+  components: ScreenComponentRef[];
+}
+
+export interface SharedComponentEntry {
+  name: string;
+  filePath: string;
+  usedByScreens: string[];
+  usageCount: number;
+}
+
+export interface ScreenDepsAnalysis {
+  screens: ScreenDeps[];
+  sharedComponents: SharedComponentEntry[];
+  stats: {
+    totalScreens: number;
+    totalUniqueComponents: number;
+    totalSharedComponents: number;
+  };
+}

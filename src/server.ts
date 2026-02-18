@@ -7,7 +7,7 @@ import {
 import { request as httpsRequest } from "https";
 import fs from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { analyzeRoute, getProjectComponentNames } from "./analyze/index.js";
 import type { ComponentTreeNode, RouteAnalysis } from "./types.js";
 
@@ -16,7 +16,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 async function getOverlayGenerator(): Promise<(data: RouteAnalysis) => string> {
   const cacheBuster = Date.now();
   const modulePath = path.resolve(__dirname, "./overlay/index.js");
-  const module = await import(`${modulePath}?cb=${cacheBuster}`);
+  const moduleUrl = pathToFileURL(modulePath).href;
+  const module = await import(`${moduleUrl}?cb=${cacheBuster}`);
   return module.generateOverlayScript;
 }
 
