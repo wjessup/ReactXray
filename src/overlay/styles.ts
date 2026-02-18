@@ -375,9 +375,10 @@ export const OVERLAY_CSS = `
     background: #0d1117;
     border: 1px solid #30363d;
     border-radius: 12px;
-    width: 560px;
+    width: 900px;
+    height: 80vh;
     max-width: 90vw;
-    max-height: 85vh;
+    max-height: 90vh;
     display: flex;
     flex-direction: column;
     box-shadow: 0 16px 48px rgba(0,0,0,0.5);
@@ -871,6 +872,32 @@ export const OVERLAY_CSS = `
     border-color: #238636;
   }
 
+  .detail-content.tab-source {
+    padding: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Specific styles when inside tab-source to fill space */
+  .detail-content.tab-source .source-container {
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .detail-content.tab-source .source-header {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+  }
+
+  .detail-content.tab-source .source-code {
+    border-radius: 0;
+    border: none;
+    max-height: none;
+  }
+
   .source-container {
     display: flex;
     flex-direction: column;
@@ -919,6 +946,7 @@ export const OVERLAY_CSS = `
     border: 1px solid #30363d;
     border-top: none;
     border-radius: 0 0 6px 6px;
+    /* Default max-height for when not in tab-source mode (unlikely but safe) */
     max-height: 450px;
   }
 
