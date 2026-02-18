@@ -946,7 +946,6 @@ export const OVERLAY_CSS = `
     border: 1px solid #30363d;
     border-top: none;
     border-radius: 0 0 6px 6px;
-    /* Default max-height for when not in tab-source mode (unlikely but safe) */
     max-height: 450px;
   }
 
