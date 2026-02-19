@@ -8,6 +8,7 @@ export const callbacks = {
 export const state = {
     STATIC_TREE: [] as any[],
     TREE: [] as any[],
+    DISPLAY_TREE: [] as any[],
     STATS: {} as any,
     ROUTE: '',
     ARCHITECTURE: null as any,
@@ -20,14 +21,12 @@ export const state = {
     searchTerm: '',
     ignoredPaths: JSON.parse(localStorage.getItem('ro-ignored-paths') || '[]') as string[],
     
-    // UI References
     host: null as HTMLElement | null,
     shadow: null as ShadowRoot | null,
     container: null as HTMLElement | null,
     hoverHighlight: null as HTMLElement | null,
     selectedHighlight: null as HTMLElement | null,
     
-    // Detailed Interaction State
     selectedFiber: null as any,
     selectedElement: null as any,
     expandedInstanceGroups: new Set<string>(),

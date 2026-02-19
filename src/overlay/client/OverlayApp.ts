@@ -1,11 +1,11 @@
 import { OVERLAY_CSS, HIGHLIGHT_CSS } from '../styles.js';
 import { state, callbacks } from './state';
-import { renderPanel } from './ui';
+import { renderPanel, selectTreeNodeByStack } from './ui';
 import { setupRenderTracking } from './render-tracking';
 import { showHoverHighlight, hideHoverHighlight, showSelectedHighlight, hideSelectedHighlight } from './highlight';
-import { isOverlayElement, getFiberFromElement, getFiberName, getDomFromFiber } from './utils';
+import { isOverlayElement, getFiberFromElement, getFiberName, getDomFromFiber, getComponentStack } from './utils';
 import { refreshAnalysis, checkForRouteChange, buildStaticComponentMap, loadComponentAllowlist, refreshFiberTree, toggle } from './logic';
-import { showDetailDialog, hideDetailDialog } from './details';
+import { findInstanceIndexForFiber, getNodeByPath } from '../runtime-logic.js';
 
 // Declarations
 declare global {
@@ -54,18 +54,56 @@ function enableInspectMode() {
         const name = fiber ? getFiberName(fiber) : null;
         const domEl = fiber ? getDomFromFiber(fiber) : e.target;
 
-        if (name && domEl) {
+        if (name) {
+            const SKIP = new Set([
+                'Image', 'Link', 'LinkComponent', 'Icon', 'Typography',
+                'PreprocessedImage', 'TooltipTrigger', 'ScrollArea', 'ScrollAreaProvider',
+            ]);
+
+            const stack = getComponentStack(e.target);
+            let chosenName: string | null = null;
+            let selectedNodeId: string | null = null;
+
+            for (let i = 0; i < stack.length; i++) {
+                const target = stack[i];
+                if (!target || SKIP.has(target)) continue;
+                selectedNodeId = selectTreeNodeByStack(stack.slice(i));
+                if (selectedNodeId) {
+                    chosenName = target;
+                    break;
+                }
+            }
+
             state.selectedFiber = fiber;
             state.selectedElement = domEl;
-            
-            showSelectedHighlight(domEl, name);
-            
-            // Auto open detail for now as in original it selected in tree
-            // We can just show detail dialog directly or try to select in tree
-            // For now, let's just highlight.
-            // If we want to mirror original behavior, we need to select in tree.
-            // We don't have tree selection logic easily exposed yet.
-            console.log('[Overlay] Selected:', name);
+
+            if (!chosenName) {
+                selectedNodeId = selectTreeNodeByStack(stack);
+            }
+
+            if (selectedNodeId && fiber) {
+                const treeNode = getNodeByPath(state.DISPLAY_TREE, selectedNodeId);
+                if (treeNode?.instances?.length > 1) {
+                    const instIdx = findInstanceIndexForFiber(treeNode, fiber);
+                    if (instIdx >= 0) {
+                        if (!state.expandedInstanceGroups.has(selectedNodeId)) {
+                            state.expandedInstanceGroups.add(selectedNodeId);
+                        }
+                        state.selectedInstanceByGroup.set(selectedNodeId, instIdx);
+                        renderPanel();
+
+                        const instId = selectedNodeId + ':' + instIdx;
+                        const instRow = state.shadow?.querySelector('.instance-row[data-instance-id="' + instId + '"]');
+                        if (instRow) {
+                            state.shadow!.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
+                            instRow.classList.add('selected');
+                            instRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }
+                }
+            }
+
+            showSelectedHighlight(domEl, chosenName || name);
         }
     };
 

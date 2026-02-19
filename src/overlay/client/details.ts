@@ -48,7 +48,6 @@ function renderDetailContent() {
                 <button class="detail-close">×</button>
             </div>
             <div class="detail-content">
-                <div class="detail-empty">Full details view coming soon</div>
                 <div style="padding: 10px; overflow: auto; max-height: 400px; font-family: monospace; font-size: 12px; white-space: pre-wrap;">
                     ${escapeHtml(JSON.stringify(currentDetailNode, null, 2))}
                 </div>
