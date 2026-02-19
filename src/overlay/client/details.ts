@@ -651,13 +651,13 @@ function renderDetailContent() {
     );
 
     // 2. Tabs
+    // 2. Tabs
     const tabs = [
         { id: 'props', label: 'Props', count: currentDataFlowGraph.propOrigins.length },
         { id: 'state', label: 'State & Hooks', count: (staticComp?.hooks?.length || 0) + (staticComp?.serverQueries?.length || 0) },
-        { id: 'graph', label: 'Data Flow', count: currentDataFlowGraph.edges.length > 0 ? '✓' : '' },
+        { id: 'graph', label: 'Data Flow', count: currentDataFlowGraph.propOrigins.length },
         { id: 'arch', label: 'Architecture', count: (smells.length + issues.length) > 0 ? (smells.length + issues.length) : '' },
-        { id: 'source', label: 'Source', count: '' },
-        { id: 'llm', label: 'Export for LLM', count: '' }
+        { id: 'source', label: 'Source', count: '' }
     ];
 
     const tabsContainer = h('div', { className: 'detail-tabs' },
@@ -677,17 +677,15 @@ function renderDetailContent() {
     if (currentTab === 'props') {
         content = renderPropsTab(compName, selectedProp, currentDataFlowGraph.propOrigins);
     } else if (currentTab === 'state') {
-        content = renderStateTab(staticComp, liveHooks);
+        content = renderStateTab(staticComp, liveHooks || [], live.state || []);
     } else if (currentTab === 'graph') {
-        content = renderGraphTab(currentDataFlowGraph);
+        content = renderDataFlowTab(currentDataFlowGraph, node, domEl, compName, live, liveHooks);
     } else if (currentTab === 'arch') {
         const archElements = renderArchitectureTab(compName, smells, archUsage);
         const localAnalysis = renderLocalAnalysis(issues, refactorHints);
         content = h('div', {}, ...Array.isArray(archElements) ? archElements : [archElements], localAnalysis);
     } else if (currentTab === 'source') {
         content = renderSourceTab(comp, node, staticComp);
-    } else if (currentTab === 'llm') {
-        content = renderLlmTab(node, domEl, compName, live, liveHooks);
     } else {
         content = h('div', { className: 'detail-empty' }, 'Unknown tab');
     }
@@ -706,100 +704,220 @@ function renderDetailContent() {
 // Helpers for Tabs (extracted for clarity)
 
 function renderPropsTab(compName: string, selectedProp: string | null, propOrigins: any[]) {
-    if (selectedProp) {
-        const flowData = getPropFlow(compName, selectedProp);
-        if (!flowData) return h('div', { className: 'detail-empty' }, 'Flow data not found');
-        
-        return [
-            h('div', { className: 'selected-prop-header' },
-                h('button', { className: 'back-to-props detail-tab', dataset: { tab: 'props' } }, '← Back to all props'),
-                h('h3', {}, 'Prop Analysis: ', h('code', {}, selectedProp))
-            ),
-            h('div',  { dangerouslySetInnerHTML: { __html: renderPropFlowGraph(flowData, selectedProp, compName) } })
-        ];
-    }
-
     if (propOrigins.length === 0) return h('div', { className: 'detail-empty' }, 'No props detected');
 
-    return propOrigins.map(origin => {
-        const hasFlow = !!getPropFlow(compName, origin.propName);
+    const rows = propOrigins.map(origin => {
+        const flowData = getPropFlow(compName, origin.propName);
+        // Has flow logic from legacy: nodeCount > 1 || (flowData.origin && type !== 'prop')
+        const nodeCount = flowData && flowData.root ? countTreeNodes(flowData.root) : 0;
+        const hasFlow = flowData && (nodeCount > 1 || (flowData.origin && flowData.origin.type !== 'prop'));
+        const isSelected = selectedProp === origin.propName;
         
-        const sourceTags = [
-            h('span', { className: `source-tag ${origin.source.source}` }, origin.source.source)
-        ];
-        if (origin.source.query) sourceTags.push(h('span', { className: 'source-detail' }, `${origin.source.query}()`));
-        if (origin.source.hookName) sourceTags.push(h('span', { className: 'source-detail' }, origin.source.hookName));
-
-        return h('div', { 
-            className: `detail-row prop-row${hasFlow ? ' has-flow' : ''}`,
+        const row = h('div', { 
+            className: `detail-row prop-row${hasFlow ? ' has-flow' : ''}${isSelected ? ' selected' : ''}`, 
             dataset: { prop: origin.propName } 
         },
-            h('div', { className: 'detail-key' },
+            h('div', { className: 'detail-key' }, 
                 origin.propName,
-                origin.optional ? h('span', { className: 'ts-opt' }, '?') : null,
-                hasFlow ? h('span', { className: 'flow-badge' }, 'Flow ↗') : null
+                origin.optional ? '?' : '', // Legacy used string '?' vs span
+                ' ',
+                origin.type ? h('span', { className: 'detail-type' }, origin.type) : '', // Legacy class
+                hasFlow ? h('span', { className: 'flow-indicator', title: 'Click to see flow' }, '📊') : ''
             ),
             h('div', { className: 'detail-value' },
-                h('span', { className: 'val' }, formatValue(origin.value, 150)),
-                h('span', { className: 'type' }, origin.type || 'any')
-            ),
-            h('div', { className: 'prop-source' }, ...sourceTags)
+                origin.value !== undefined ? formatValue(origin.value, 100) : h('span', { className: 'detail-undefined' }, 'undefined')
+            )
         );
+        
+        if (isSelected && flowData) {
+            return [row, h('div', { dangerouslySetInnerHTML: { __html: renderPropFlowGraph(flowData, origin.propName, compName) } })];
+        }
+        return row;
     });
+
+    return h('div', { className: 'props-list' }, ...rows.flat());
 }
 
-function renderStateTab(staticComp: any, liveHooks: any[]) {
+
+
+function renderStateTab(staticComp: any, liveHooks: any[], liveState: any[]) {
     const staticHooks = staticComp?.hooks || [];
     const serverQueries = staticComp?.serverQueries || [];
-    
-    if (staticHooks.length === 0 && serverQueries.length === 0) {
-        return h('div', { className: 'detail-empty' }, 'No state or hooks detected');
-    }
-    
     const elements = [];
     
-    if (serverQueries.length > 0) {
-        elements.push(h('div', { className: 'section-title' }, 'Server Queries'));
-        elements.push(...serverQueries.map((q: string) => h('div', { className: 'prop-row' },
-            h('div', { className: 'prop-key' }, q),
-            h('div', { className: 'prop-value' }, h('span', { className: 'val' }, 'Async Data Fetch')),
-            h('div', { className: 'prop-source' }, h('span', { className: 'source-tag serverQuery' }, 'server'))
+    // State (useState)
+    if (liveState && liveState.length > 0) {
+        elements.push(...liveState.map((s: any) => h('div', { className: 'detail-row' },
+            h('div', { className: 'detail-key' }, `useState[${s.index}]`),
+            h('div', { className: 'detail-value' }, formatValue(s.value, 100))
         )));
     }
     
-    if (staticHooks.length > 0) {
-        elements.push(h('div', { className: 'section-title' }, 'Hooks'));
-        elements.push(...staticHooks.map((hookName: string, i: number) => {
-            const liveHook = liveHooks[i];
-            const val = liveHook?.value;
-            return h('div', { className: 'prop-row' },
-                h('div', { className: 'prop-key' }, hookName),
-                h('div', { className: 'prop-value' }, h('span', { className: 'val' }, liveHook ? formatValue(val) : '—'))
-            );
+    // Hooks
+    if (liveHooks.length > 0) {
+        elements.push(...liveHooks.map((hData: any, i: number) => {
+             const hookName = hData.type; // or staticName if we merge
+             // Legacy mergedHooks logic: staticName from staticHooks[i]
+             const staticName = staticHooks[i] || null;
+             const name = staticName || hookName;
+             
+             return h('div', { className: 'detail-row' },
+                h('div', { className: 'detail-key' }, `${name}[${hData.index}]`),
+                h('div', { className: 'detail-value' }, hData.value !== null ? formatValue(hData.value, 80) : '—')
+             );
         }));
+    } else if (staticHooks.length > 0) {
+         elements.push(...staticHooks.map((name: string, i: number) => h('div', { className: 'detail-row' },
+            h('div', { className: 'detail-key' }, `${name}[${i}]`),
+            h('div', { className: 'detail-value' }, '—')
+         )));
     }
     
+    // Server Queries ?? Legacy didn't explicitly list them in State tab? 
+    // Legacy had separate tabs for Props, State, Hooks. I am merging State & Hooks.
+    // Legacy "State" tab: live.state
+    // Legacy "Hooks" tab: mergedHooks
+    
+    if (elements.length === 0) return h('div', { className: 'detail-empty' }, 'No state or hooks detected');
     return elements;
 }
 
-function renderGraphTab(graph: any) {
-    const edgeCount = graph.edges.length;
-    if (edgeCount === 0) return h('div', { className: 'detail-empty' }, 'No data flow graph available');
-
-    return [
-        h('div', { className: 'graph-summary' },
-            h('p', {}, `Graph contains ${graph.nodes.length} nodes and ${edgeCount} edges.`),
-            h('p', {}, 'Visual graph rendering via Mermaid or similar library is recommended for export.')
-        ),
-        h('div', { className: 'export-actions' },
-            h('button', { className: 'copy-mermaid-btn' }, '📊 Copy Mermaid Diagram'),
-            h('button', { className: 'copy-llm-btn' }, '🤖 Copy JSON for LLM')
-        ),
-        h('div', { className: 'graph-preview' },
-            h('pre', {}, generateMermaidDiagram(graph))
-        )
-    ];
+function renderDataFlowTab(graph: any, node: any, domEl: any, compName: string, live: any, liveHooks: any) {
+    // Ported from legacy renderDataFlowGraph
+    if (!graph || !graph.propOrigins.length) return h('div', { className: 'detail-empty' }, 'No props detected for this component');
+    
+    const sourceColors: Record<string, string> = {
+        hook: '#d2a8ff', query: '#7ee787', serverQuery: '#7ee787', prop: '#ffa657',
+        context: '#f778ba', computed: '#f0883e', literal: '#8b949e', unknown: '#484f58'
+    };
+    
+    const sourceIcons: Record<string, string> = {
+        hook: '⚡', query: '🔍', serverQuery: '🔍', prop: '↑',
+        context: '🌐', computed: '⚙️', literal: '📝', unknown: '❓'
+    };
+    
+    const rows = graph.propOrigins.map((origin: any) => {
+        const sourceType = origin.source.source === 'serverQuery' ? 'query' : origin.source.source;
+        const sourceColor = sourceColors[sourceType] || sourceColors.unknown;
+        const sourceIcon = sourceIcons[sourceType] || sourceIcons.unknown;
+        const hasChain = origin.chain.length > 1;
+        const typeCategory = getTypeCategory(origin.type);
+        const formattedType = formatType(origin.type);
+        const isFunction = typeCategory === 'function';
+        
+        const row = h('div', { className: `df-row${hasChain ? ' traced' : ''}` },
+            h('div', { className: 'df-prop' },
+                h('span', { className: `df-name${isFunction ? ' fn' : ''}` }, origin.propName),
+                origin.optional ? h('span', { className: 'df-opt' }, '?') : null,
+                formattedType ? h('span', { className: `df-type ${typeCategory}`, title: origin.type }, formattedType) : null
+            ),
+            h('div', { className: 'df-source', style: { '--src-color': sourceColor } },
+                h('span', { className: 'df-src-icon' }, sourceIcon),
+                renderSourceLabel(origin.source)
+            )
+        );
+        
+        const children = [row];
+        
+        if (hasChain) {
+            const chainItems = [];
+            for (let i = origin.chain.length - 1; i >= 0; i--) {
+                const link = origin.chain[i];
+                const isLast = i === 0;
+                
+                const chainContent = [
+                    h('span', { className: 'df-chain-comp' }, link.componentName)
+                ];
+                
+                if (link.queryName) chainContent.push(h('span', { className: 'df-chain-via query' }, `.${link.queryName}()`));
+                else if (link.hookName) chainContent.push(h('span', { className: 'df-chain-via hook' }, `.${link.hookName}()`));
+                else if (link.propName) chainContent.push(h('span', { className: 'df-chain-via prop' }, `.${link.propName}`));
+                
+                chainItems.push(h('span', { className: `df-chain-item${isLast ? ' target' : ''}` }, ...chainContent));
+                if (!isLast) chainItems.push(h('span', { className: 'df-chain-arrow' }, '→'));
+            }
+            children.push(h('div', { className: 'df-chain' }, ...chainItems));
+        }
+        
+        return children;
+    });
+    
+    // Summary
+    const propCount = graph.propOrigins.length;
+    const tracedCount = graph.propOrigins.filter((p: any) => p.chain.length > 1).length;
+    const fnCount = graph.propOrigins.filter((p: any) => getTypeCategory(p.type) === 'function').length;
+    
+    const summary = h('div', { className: 'df-summary' },
+        h('span', { className: 'df-stat' }, `${propCount} props`),
+        h('span', { className: 'df-stat traced' }, `${tracedCount} traced`),
+        fnCount > 0 ? h('span', { className: 'df-stat fn' }, `${fnCount} callbacks`) : null
+    );
+    
+    // Actions
+    const actions = h('div', { className: 'dataflow-actions' },
+        h('button', { 
+            className: 'copy-llm-btn', 
+            title: 'Copy as JSON for LLM',
+            onClick: () => {
+                const exportData = generateLLMExport(graph, node, live.props || {}, liveHooks);
+                navigator.clipboard.writeText(JSON.stringify(exportData, null, 2))
+                    .then(() => console.log('Copied to clipboard for LLM'))
+                    .catch(err => console.error('Failed to copy', err));
+            }
+        }, '📋 Copy for LLM'),
+        h('button', { 
+            className: 'copy-mermaid-btn', 
+            title: 'Copy as Mermaid diagram',
+            onClick: () => {
+                const mermaidData = generateMermaidDiagram(graph);
+                navigator.clipboard.writeText(mermaidData)
+                    .then(() => console.log('Copied Mermaid diagram'))
+                    .catch(err => console.error('Failed to copy', err));
+            }
+        }, '📊 Mermaid')
+    );
+    
+    return h('div', { className: 'dataflow-graph' },
+        h('div', { className: 'dataflow-origins' }, ...rows.flat()),
+        summary,
+        actions
+    );
 }
+
+function renderSourceLabel(source: any) {
+    if (source.source === 'serverQuery') return h('span', { className: 'df-src-label' }, `${source.query || 'query'}()`);
+    if (source.source === 'hook') return h('span', { className: 'df-src-label' }, source.hookName || 'hook');
+    if (source.source === 'prop') return h('span', { className: 'df-src-label' }, 'from parent');
+    if (source.source === 'context') return h('span', { className: 'df-src-label' }, source.contextName || 'context');
+    if (source.source === 'computed') return h('span', { className: 'df-src-label' }, 'computed');
+    if (source.source === 'literal') return h('span', { className: 'df-src-label' }, 'literal');
+    return h('span', { className: 'df-src-label' }, 'unknown');
+}
+
+function getTypeCategory(typeStr: string | null) {
+  if (!typeStr) return 'unknown';
+  const t = typeStr.toLowerCase();
+  if (t.includes('=>') || t.includes('function') || t.includes('void')) return 'function';
+  if (t === 'boolean' || t.includes('boolean')) return 'boolean';
+  if (t === 'number' || t.includes('number')) return 'number';
+  if (t === 'string' || t.includes('string')) return 'string';
+  if (t.startsWith('{') || t.includes('interface')) return 'object';
+  if (t.includes('[]') || t.startsWith('array')) return 'array';
+  return 'type';
+}
+
+function formatType(typeStr: string | null) {
+  if (!typeStr) return '';
+  let t = typeStr
+    .replace(/import\([^)]+\)\./g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (t.length > 40) {
+    t = t.slice(0, 37) + '...';
+  }
+  return t;
+}
+
 
 function renderLocalAnalysis(issues: string[], refactorHints: string[]) {
     if (issues.length === 0 && refactorHints.length === 0) return null;
@@ -839,20 +957,7 @@ function renderSourceTab(comp: any, node: any, staticComp: any) {
     }
 }
 
-function renderLlmTab(node: any, domEl: any, compName: string, live: any, liveHooks: any) {
-    const exportData = generateLLMExport(currentDataFlowGraph, node, live.props || {}, liveHooks);
-    const json = JSON.stringify(exportData, null, 2);
-    
-    return [
-        h('div', { className: 'llm-header' },
-            h('p', {}, 'Context for LLM analysis (includes props, data flow, hooks, and issues)'),
-            h('button', { className: 'copy-llm-btn' }, '📋 Copy for LLM')
-        ),
-        h('pre', { className: 'llm-code' },
-            h('code', {}, json)
-        )
-    ];
-}
+
 
 
 // Assign to callbacks
