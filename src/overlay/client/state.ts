@@ -1,0 +1,43 @@
+export const callbacks = {
+    render: () => {},
+    refresh: async () => {},
+    showDetail: (node: any, domEl: any) => {},
+    onToggle: (isOpen: boolean) => {},
+};
+
+export const state = {
+    STATIC_TREE: [] as any[],
+    TREE: [] as any[],
+    STATS: {} as any,
+    ROUTE: '',
+    ARCHITECTURE: null as any,
+    FIBER_TREE: [] as any[],
+    
+    panelWidth: parseInt(localStorage.getItem('ro-panel-width') || '380', 10),
+    isOpen: false,
+    isLoading: true,
+    isPaused: false,
+    searchTerm: '',
+    ignoredPaths: JSON.parse(localStorage.getItem('ro-ignored-paths') || '[]') as string[],
+    
+    // UI References
+    host: null as HTMLElement | null,
+    shadow: null as ShadowRoot | null,
+    container: null as HTMLElement | null,
+    hoverHighlight: null as HTMLElement | null,
+    selectedHighlight: null as HTMLElement | null,
+    
+    // Detailed Interaction State
+    selectedFiber: null as any,
+    selectedElement: null as any,
+    expandedInstanceGroups: new Set<string>(),
+    selectedInstanceByGroup: new Map<string, number>(),
+    
+    renderCounts: new Map<string, number>(),
+    totalRenders: 0
+};
+
+export function saveState() {
+    localStorage.setItem('ro-panel-width', state.panelWidth.toString());
+    localStorage.setItem('ro-ignored-paths', JSON.stringify(state.ignoredPaths));
+}
