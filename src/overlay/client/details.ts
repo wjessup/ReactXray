@@ -642,10 +642,10 @@ function renderDetailContent() {
 
     const header = h('div', { className: 'detail-header' },
         h('div', {},
-            h('h2', { className: 'detail-title' }, compName),
+            h('h3', { className: 'detail-title' }, compName),
             h('div', { className: 'detail-subtitle' },
-                h('span', { className: 'detail-file' }, file),
-                ...badges
+                h('span', { className: 'file' }, file),
+                h('div', { className: 'badges' }, ...badges),
             )
         )
     );
@@ -715,7 +715,7 @@ function renderPropsTab(compName: string, selectedProp: string | null, propOrigi
                 h('button', { className: 'back-to-props detail-tab', dataset: { tab: 'props' } }, '← Back to all props'),
                 h('h3', {}, 'Prop Analysis: ', h('code', {}, selectedProp))
             ),
-            h('div', { dangerouslySetInnerHTML: { __html: renderPropFlowGraph(flowData, selectedProp, compName) } }) // Legacy
+            h('div',  { dangerouslySetInnerHTML: { __html: renderPropFlowGraph(flowData, selectedProp, compName) } })
         ];
     }
 
@@ -731,15 +731,15 @@ function renderPropsTab(compName: string, selectedProp: string | null, propOrigi
         if (origin.source.hookName) sourceTags.push(h('span', { className: 'source-detail' }, origin.source.hookName));
 
         return h('div', { 
-            className: `prop-row${hasFlow ? ' has-flow' : ''}`, 
+            className: `detail-row prop-row${hasFlow ? ' has-flow' : ''}`,
             dataset: { prop: origin.propName } 
         },
-            h('div', { className: 'prop-key' }, 
+            h('div', { className: 'detail-key' },
                 origin.propName,
                 origin.optional ? h('span', { className: 'ts-opt' }, '?') : null,
                 hasFlow ? h('span', { className: 'flow-badge' }, 'Flow ↗') : null
             ),
-            h('div', { className: 'prop-value' },
+            h('div', { className: 'detail-value' },
                 h('span', { className: 'val' }, formatValue(origin.value, 150)),
                 h('span', { className: 'type' }, origin.type || 'any')
             ),

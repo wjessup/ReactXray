@@ -594,6 +594,7 @@ export const OVERLAY_CSS = `
 
   .detail-content {
     flex: 1;
+    // flex-direction: column;
     overflow-y: auto;
     padding: 16px 20px;
     min-height: 0;
