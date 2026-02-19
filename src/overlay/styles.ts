@@ -373,6 +373,7 @@ export const OVERLAY_CSS = `
 
   .detail-dialog {
     background: #0d1117;
+    color: #c9d1d9;
     border: 1px solid #30363d;
     border-radius: 12px;
     width: 900px;
@@ -1134,6 +1135,43 @@ export const OVERLAY_CSS = `
   }
 
   /* Prop Flow Styles */
+  .selected-prop-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #30363d;
+  }
+
+  .selected-prop-header h3 {
+    margin: 0;
+    font-size: 14px;
+    color: #c9d1d9;
+    flex: 1;
+  }
+
+  .selected-prop-header code {
+    color: #79c0ff;
+    font-family: 'SF Mono', monospace;
+    background: rgba(88, 166, 255, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .back-to-props {
+    font-size: 11px !important;
+    padding: 4px 8px !important;
+    border: 1px solid #30363d !important;
+    border-radius: 4px !important;
+    background: #21262d !important;
+  }
+
+  .back-to-props:hover {
+    border-color: #8b949e !important;
+    color: #c9d1d9 !important;
+  }
+
   .props-list {
     display: flex;
     flex-direction: column;
