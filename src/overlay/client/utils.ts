@@ -365,3 +365,50 @@ export function findFirstNodeWithName(nodes: any[], name: string, prefix = ''): 
     }
     return null;
 }
+
+/**
+ * Helper function to create DOM elements with properties and children.
+ * 
+ * @param tag The tag name of the element (e.g., 'div', 'span').
+ * @param props An object containing properties to set on the element. 
+ *              Supports `className`, `style` (object), `dataset` (object), 
+ *              event listeners (starting with `on`), `dangerouslySetInnerHTML`, 
+ *              and standard attributes.
+ * @param children Child nodes or strings to append to the element. 
+ *                 Can be strings, Numbers, DOM Nodes, or arrays of these.
+ * @returns The created HTMLElement.
+ */
+export function h(tag: string, props: Record<string, any> | null = null, ...children: any[]): HTMLElement {
+    const el = document.createElement(tag);
+    if (props) {
+        for (const key in props) {
+            const val = props[key];
+            if (key.startsWith('on') && typeof val === 'function') {
+                el.addEventListener(key.substring(2).toLowerCase(), val);
+            } else if (key === 'style' && typeof val === 'object') {
+                Object.assign(el.style, val);
+            } else if (key === 'className') {
+                el.className = val;
+            } else if (key === 'dataset' && typeof val === 'object') {
+                Object.assign(el.dataset, val);
+            } else if (key === 'dangerouslySetInnerHTML') {
+                el.innerHTML = val.__html;
+            } else if (val !== false && val !== null && val !== undefined) {
+                el.setAttribute(key, val === true ? '' : String(val));
+            }
+        }
+    }
+    
+    const append = (child: any) => {
+        if (Array.isArray(child)) {
+            child.forEach(append);
+        } else if (child instanceof Node) {
+            el.appendChild(child);
+        } else if (child !== null && child !== undefined && child !== false) {
+            el.appendChild(document.createTextNode(String(child)));
+        }
+    };
+    
+    children.forEach(append);
+    return el;
+}

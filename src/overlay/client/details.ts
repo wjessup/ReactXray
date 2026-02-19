@@ -1,5 +1,5 @@
 import { state, callbacks } from './state';
-import { escapeHtml, formatValue, extractSourceLocation } from './utils';
+import { escapeHtml, formatValue, extractSourceLocation, h } from './utils';
 import { 
     buildDataFlowGraph, 
     detectPotentialIssues, 
@@ -297,7 +297,7 @@ function highlightCode(code: string, language?: string) {
 }
 
 function renderSourceCode(code: string | null, filePath: string) {
-    if (!code) return '<div class="detail-empty">Source not available</div>';
+    if (!code) return h('div', { className: 'detail-empty' }, 'Source not available');
     
     const ext = filePath.split('.').pop() || 'tsx';
     const langMap: Record<string, string> = { tsx: 'typescript', ts: 'typescript', jsx: 'javascript', js: 'javascript', css: 'css', json: 'json' };
@@ -305,132 +305,162 @@ function renderSourceCode(code: string | null, filePath: string) {
     
     const highlighted = highlightCode(code, language);
     
-    return '<div class="source-container"><div class="source-header"><span class="source-path">' + escapeHtml(filePath) + '</span><button class="source-copy-btn" title="Copy source">📋 Copy</button><button class="source-open-btn" title="Open in editor">↗ Open</button></div><div class="source-code"><pre><code class="hljs language-' + language + '">' + highlighted + '</code></pre></div></div>';
+    // Note: highlighted code from highlight.js is HTML string, so we must use dangerouslySetInnerHTML for the code block
+    return h('div', { className: 'source-container' },
+        h('div', { className: 'source-header' },
+            h('span', { className: 'source-path' }, escapeHtml(filePath)),
+            h('button', { className: 'source-copy-btn', title: 'Copy source' }, '📋 Copy'),
+            h('button', { className: 'source-open-btn', title: 'Open in editor' }, '↗ Open')
+        ),
+        h('div', { className: 'source-code' },
+            h('pre', {}, 
+                h('code', { 
+                    className: 'hljs language-' + language,
+                    dangerouslySetInnerHTML: { __html: highlighted }
+                })
+            )
+        )
+    );
 }
 
-function renderTreeNode(node: any, depth: number): string {
+function renderTreeNode(node: any, depth: number): HTMLElement | string {
     if (depth > 4) return '';
     
     const hasSourceLink = node.parentFile && node.line;
-    const clickData = hasSourceLink ? ' data-source-file="' + node.parentFile + '" data-source-line="' + node.line + '"' : '';
-    const clickableClass = hasSourceLink ? ' clickable' : '';
+    const headerProps: any = { className: 'prop-tree-header' };
+    if (hasSourceLink) {
+        headerProps.className += ' clickable';
+        headerProps.dataset = { sourceFile: node.parentFile, sourceLine: node.line };
+    }
     
-    let html = '<div class="prop-tree-node" style="margin-left: ' + (depth * 16) + 'px">';
+    const children = [];
     
-    html += '<div class="prop-tree-header' + clickableClass + '"' + clickData + '>';
-    html += '<span class="prop-tree-comp">' + node.componentName + '</span>';
-    html += '<span class="prop-tree-dot">.</span>';
-    html += '<span class="prop-tree-prop">' + node.propName + '</span>';
-    
+    // Header content
+    const headerContent = [
+        h('span', { className: 'prop-tree-comp' }, node.componentName),
+        h('span', { className: 'prop-tree-dot' }, '.'),
+        h('span', { className: 'prop-tree-prop' }, node.propName)
+    ];
+
     if (node.fullPath && node.fullPath.includes('.')) {
-        const path = node.fullPath;
-        html += '<span class="prop-tree-access">' + path + '</span>';
+        headerContent.push(h('span', { className: 'prop-tree-access' }, node.fullPath));
     } else if (node.fullPath && node.fullPath.includes('→')) {
-        html += '<span class="prop-tree-rename">⚠️ rename</span>';
+        headerContent.push(h('span', { className: 'prop-tree-rename' }, '⚠️ rename'));
     }
     
     if (hasSourceLink) {
-        html += '<span class="prop-tree-goto" title="Jump to source">→</span>';
+        headerContent.push(h('span', { className: 'prop-tree-goto', title: 'Jump to source' }, '→'));
     }
-    html += '</div>';
+    
+    children.push(h('div', headerProps, ...headerContent));
     
     if (node.children && node.children.length > 0) {
-        html += '<div class="prop-tree-children">';
-        for (const child of node.children) {
-            html += '<div class="prop-tree-branch">';
-            html += '<span class="prop-tree-line">├─</span>';
-            html += renderTreeNode(child, depth + 1);
-            html += '</div>';
-        }
-        html += '</div>';
+        const branchChildren = node.children.map((child: any) => h('div', { className: 'prop-tree-branch' },
+            h('span', { className: 'prop-tree-line' }, '├─'),
+            renderTreeNode(child, depth + 1)
+        ));
+        children.push(h('div', { className: 'prop-tree-children' }, ...branchChildren));
     }
     
-    html += '</div>';
-    return html;
+    return h('div', { className: 'prop-tree-node', style: { marginLeft: (depth * 16) + 'px' } }, ...children);
 }
 
 function renderPropFlowGraph(flowData: any, highlightProp: string | null, compName: string) {
     if (!flowData || !flowData.root) {
-        return '<div class="prop-flow-empty">No flow data</div>';
+        return h('div', { className: 'prop-flow-empty' }, 'No flow data');
     }
 
     const upwardFlow = getPropUpwardFlow(compName, flowData.propName);
-    let html = '<div class="prop-flow-graph">';
+    const containerChildren = [];
     
+    // Upward Flow Section
     if (upwardFlow && upwardFlow.usages && upwardFlow.usages.length > 0) {
-        html += '<div class="prop-upward-section">';
-        html += '<div class="prop-section-label">⬆ WHERE IT COMES FROM</div>';
-        
-        for (const usage of upwardFlow.usages) {
-            html += '<div class="prop-upward-path">';
+        const sectionLabel = h('div', { className: 'prop-section-label' }, '⬆ WHERE IT COMES FROM');
+        const usages = upwardFlow.usages.map((usage: any) => {
+            let usageContent;
             
             if (usage.upstreamChain && usage.upstreamChain.length > 0) {
+                const chainElements = [];
                 for (let i = usage.upstreamChain.length - 1; i >= 0; i--) {
                     const node = usage.upstreamChain[i];
                     const isTerminal = node.isTerminal;
-                    const terminalClass = isTerminal ? ' terminal' : '';
-                    const sourceClass = node.sourceType === 'hook' ? ' hook' : node.sourceType === 'query' ? ' query' : node.sourceType === 'context' ? ' context' : '';
+                    let className = 'prop-upstream-node';
+                    if (isTerminal) className += ' terminal';
+                    if (node.sourceType) className += ' ' + node.sourceType;
                     
-                    html += '<div class="prop-upstream-node' + terminalClass + sourceClass + '">';
-                    html += '<span class="prop-upstream-comp">' + node.componentName + '</span>';
-                    if (node.propName) {
-                        html += '<span class="prop-upstream-via">.' + node.propName + '</span>';
-                    }
-                    html += '<span class="prop-upstream-source">' + node.sourceName + '</span>';
-                    if (isTerminal) {
-                        html += '<span class="prop-upstream-terminal-badge ' + node.sourceType + '">' + node.sourceType.toUpperCase() + '</span>';
-                    }
-                    html += '</div>';
+                    const nodeChildren = [
+                        h('span', { className: 'prop-upstream-comp' }, node.componentName),
+                        node.propName ? h('span', { className: 'prop-upstream-via' }, '.' + node.propName) : null,
+                        h('span', { className: 'prop-upstream-source' }, node.sourceName),
+                        isTerminal ? h('span', { className: 'prop-upstream-terminal-badge ' + node.sourceType }, node.sourceType.toUpperCase()) : null
+                    ];
+                    
+                    chainElements.push(h('div', { className }, ...nodeChildren));
                     
                     if (i > 0) {
-                        html += '<div class="prop-upstream-arrow">↓</div>';
+                        chainElements.push(h('div', { className: 'prop-upstream-arrow' }, '↓'));
                     }
                 }
+                usageContent = chainElements;
             } else {
-                html += '<div class="prop-upstream-node' + (usage.valueSource.type !== 'prop' ? ' terminal ' + usage.valueSource.type : '') + '">';
-                html += '<span class="prop-upstream-comp">' + usage.parentComponent + '</span>';
-                html += '<span class="prop-upstream-source">' + usage.valueSource.expression + '</span>';
-                if (usage.valueSource.type !== 'prop' && usage.valueSource.type !== 'computed') {
-                    html += '<span class="prop-upstream-terminal-badge ' + usage.valueSource.type + '">' + usage.valueSource.type.toUpperCase() + '</span>';
-                }
-                html += '</div>';
+                const className = 'prop-upstream-node' + (usage.valueSource.type !== 'prop' ? ' terminal ' + usage.valueSource.type : '');
+                const nodeChildren = [
+                    h('span', { className: 'prop-upstream-comp' }, usage.parentComponent),
+                    h('span', { className: 'prop-upstream-source' }, usage.valueSource.expression),
+                    (usage.valueSource.type !== 'prop' && usage.valueSource.type !== 'computed') ? 
+                        h('span', { className: 'prop-upstream-terminal-badge ' + usage.valueSource.type }, usage.valueSource.type.toUpperCase()) : null
+                ];
+                usageContent = [h('div', { className }, ...nodeChildren)];
             }
             
-            html += '</div>';
-        }
+            return h('div', { className: 'prop-upward-path' }, ...usageContent);
+        });
         
-        html += '<div class="prop-flow-connector"><span class="prop-flow-arrow">↓</span></div>';
-        html += '</div>';
+        containerChildren.push(h('div', { className: 'prop-upward-section' },
+            sectionLabel,
+            ...usages,
+            h('div', { className: 'prop-flow-connector' }, h('span', { className: 'prop-flow-arrow' }, '↓'))
+        ));
+
     } else if (flowData.origin && flowData.origin.type !== 'prop') {
-        html += '<div class="prop-flow-origin">';
-        html += '<span class="prop-flow-origin-label">⬆ Origin:</span>';
-        html += '<span class="prop-flow-origin-value">' + flowData.origin.name + '</span>';
-        if (flowData.origin.type === 'hook') {
-            html += '<span class="prop-flow-origin-type">hook</span>';
-        } else if (flowData.origin.type === 'query') {
-            html += '<span class="prop-flow-origin-type">server</span>';
-        }
-        html += '</div>';
-        html += '<div class="prop-flow-connector"><span class="prop-flow-arrow">↓</span></div>';
+        const originType = flowData.origin.type === 'hook' ? 'hook' : flowData.origin.type === 'query' ? 'server' : null;
+        const originElements = [
+            h('span', { className: 'prop-flow-origin-label' }, '⬆ Origin:'),
+            h('span', { className: 'prop-flow-origin-value' }, flowData.origin.name),
+            originType ? h('span', { className: 'prop-flow-origin-type' }, originType) : null
+        ];
+        
+        containerChildren.push(
+            h('div', { className: 'prop-flow-origin' }, ...originElements),
+            h('div', { className: 'prop-flow-connector' }, h('span', { className: 'prop-flow-arrow' }, '↓'))
+        );
+
     } else if (flowData.origin && flowData.origin.type === 'prop') {
-        html += '<div class="prop-flow-origin">';
-        html += '<span class="prop-flow-origin-label">⬆ From parent:</span>';
-        html += '<span class="prop-flow-origin-value">' + flowData.origin.name + '</span>';
-        html += '</div>';
-        html += '<div class="prop-flow-connector"><span class="prop-flow-arrow">↓</span></div>';
+        containerChildren.push(
+            h('div', { className: 'prop-flow-origin' },
+                h('span', { className: 'prop-flow-origin-label' }, '⬆ From parent:'),
+                h('span', { className: 'prop-flow-origin-value' }, flowData.origin.name)
+            ),
+            h('div', { className: 'prop-flow-connector' }, h('span', { className: 'prop-flow-arrow' }, '↓'))
+        );
     }
 
+    // Downward Flow Section
+    // renderTreeNode returns HTMLElement or string (empty string). h handles string fine if it's text,
+    // but renderTreeNode returns *HTML string* in legacy mode? No I changed it to return HTMLElement | string.
+    // Empty string is fine.
+    
+    // Check if root has children to decide if we wrap in downward section
     if (flowData.root.children && flowData.root.children.length > 0) {
-        html += '<div class="prop-downward-section">';
-        html += '<div class="prop-section-label">⬇ WHERE IT FLOWS TO</div>';
-        html += renderTreeNode(flowData.root, 0);
-        html += '</div>';
+        containerChildren.push(h('div', { className: 'prop-downward-section' },
+            h('div', { className: 'prop-section-label' }, '⬇ WHERE IT FLOWS TO'),
+            renderTreeNode(flowData.root, 0)
+        ));
     } else {
-        html += renderTreeNode(flowData.root, 0);
+        containerChildren.push(renderTreeNode(flowData.root, 0));
     }
 
-    html += '</div>';
-    return html;
+    return h('div', { className: 'prop-flow-graph' }, ...containerChildren);
 }
 
 function formatSmellType(type: string) {
@@ -447,127 +477,142 @@ function formatSmellType(type: string) {
 }
 
 function renderArchitectureTab(compName: string, smells: any[], usage: any) {
-    let html = '';
-
     if (!state.ARCHITECTURE) {
-        return '<div class="detail-empty">Architecture analysis not available</div>';
+        return h('div', { className: 'detail-empty' }, 'Architecture analysis not available');
     }
 
     const totalSmells = state.ARCHITECTURE.smells?.length || 0;
     const totalPassThrough = state.ARCHITECTURE.passThroughComponents?.length || 0;
     const totalNoOps = state.ARCHITECTURE.noOpFunctions?.length || 0;
+    
+    const sections = [];
 
-    html += '<div class="arch-section">';
-    html += '<h4 class="arch-section-title">📊 Route Overview</h4>';
-    html += '<div class="arch-stat-row">';
-    html += '<span class="arch-stat-label">Total issues found:</span>';
-    html += '<span class="arch-stat-value">' + totalSmells + '</span>';
-    html += '</div>';
+    // Route Overview
+    const overviewStats = [
+        h('div', { className: 'arch-stat-row' },
+            h('span', { className: 'arch-stat-label' }, 'Total issues found:'),
+            h('span', { className: 'arch-stat-value' }, totalSmells)
+        )
+    ];
+    
     if (totalPassThrough > 0) {
-        html += '<div class="arch-stat-row">';
-        html += '<span class="arch-stat-label">Pass-through components:</span>';
-        html += '<span class="arch-stat-value">' + totalPassThrough + '</span>';
-        html += '</div>';
+        overviewStats.push(h('div', { className: 'arch-stat-row' },
+            h('span', { className: 'arch-stat-label' }, 'Pass-through components:'),
+            h('span', { className: 'arch-stat-value' }, totalPassThrough)
+        ));
     }
+    
     if (totalNoOps > 0) {
-        html += '<div class="arch-stat-row">';
-        html += '<span class="arch-stat-label">No-op functions:</span>';
-        html += '<span class="arch-stat-value">' + totalNoOps + '</span>';
-        html += '</div>';
+        overviewStats.push(h('div', { className: 'arch-stat-row' },
+            h('span', { className: 'arch-stat-label' }, 'No-op functions:'),
+            h('span', { className: 'arch-stat-value' }, totalNoOps)
+        ));
     }
-    html += '</div>';
+    
+    sections.push(h('div', { className: 'arch-section' },
+        h('h4', { className: 'arch-section-title' }, '� Route Overview'),
+        ...overviewStats
+    ));
 
+    // Usage Context
     if (usage && usage.totalUsages > 0) {
-        html += '<div class="arch-section">';
-        html += '<h4 class="arch-section-title">📍 Usage Context</h4>';
-        
-        html += '<div class="arch-stat-row">';
-        html += '<span class="arch-stat-label">Total usages:</span>';
-        html += '<span class="arch-stat-value">' + usage.totalUsages + '</span>';
-        html += '</div>';
+        const usageStats = [
+            h('div', { className: 'arch-stat-row' },
+                h('span', { className: 'arch-stat-label' }, 'Total usages:'),
+                h('span', { className: 'arch-stat-value' }, usage.totalUsages)
+            )
+        ];
         
         if (usage.usedInComponents && usage.usedInComponents.length > 0) {
-            html += '<div class="arch-stat-row">';
-            html += '<span class="arch-stat-label">Used by:</span>';
-            html += '<span class="arch-stat-value">' + usage.usedInComponents.slice(0, 5).join(', ');
-            if (usage.usedInComponents.length > 5) html += ' +' + (usage.usedInComponents.length - 5) + ' more';
-            html += '</span>';
-            html += '</div>';
+            let usedByText = usage.usedInComponents.slice(0, 5).join(', ');
+            if (usage.usedInComponents.length > 5) usedByText += ' +' + (usage.usedInComponents.length - 5) + ' more';
+            
+            usageStats.push(h('div', { className: 'arch-stat-row' },
+                h('span', { className: 'arch-stat-label' }, 'Used by:'),
+                h('span', { className: 'arch-stat-value' }, usedByText)
+            ));
         }
         
         if (usage.pageContexts && usage.pageContexts.length > 0) {
-            html += '<div class="arch-stat-row">';
-            html += '<span class="arch-stat-label">Page contexts:</span>';
-            html += '<span class="arch-stat-value">' + usage.pageContexts.length + ' pages</span>';
-            html += '</div>';
-            html += '<div class="arch-pages">';
-            for (const ctx of usage.pageContexts.slice(0, 5)) {
-                html += '<div class="arch-page-badge">' + ctx + '</div>';
-            }
+            usageStats.push(h('div', { className: 'arch-stat-row' },
+                h('span', { className: 'arch-stat-label' }, 'Page contexts:'),
+                h('span', { className: 'arch-stat-value' }, usage.pageContexts.length + ' pages')
+            ));
+            
+            const badges = usage.pageContexts.slice(0, 5).map((ctx: string) => h('div', { className: 'arch-page-badge' }, ctx));
             if (usage.pageContexts.length > 5) {
-                html += '<div class="arch-page-badge">+' + (usage.pageContexts.length - 5) + ' more</div>';
+                badges.push(h('div', { className: 'arch-page-badge' }, '+' + (usage.pageContexts.length - 5) + ' more'));
             }
-            html += '</div>';
+            usageStats.push(h('div', { className: 'arch-pages' }, ...badges));
         }
         
-        html += '</div>';
+        sections.push(h('div', { className: 'arch-section' },
+            h('h4', { className: 'arch-section-title' }, '📍 Usage Context'),
+            ...usageStats
+        ));
     }
 
+    // Similar Components
     const similar = getArchSimilarForComponent(compName);
     if (similar && similar.length > 0) {
-        html += '<div class="arch-section">';
-        html += '<h4 class="arch-section-title">🔄 Similar Components</h4>';
-        for (const sim of similar.slice(0, 5)) {
+        const similarItems = similar.slice(0, 5).map((sim: any) => {
             const pct = Math.round(sim.similarity * 100);
-            html += '<div class="arch-similar-item">';
-            html += '<span class="arch-similar-name">' + sim.name + '</span>';
-            html += '<span class="arch-similar-pct">' + pct + '% similar</span>';
+            const itemChildren = [
+                h('span', { className: 'arch-similar-name' }, sim.name),
+                h('span', { className: 'arch-similar-pct' }, pct + '% similar')
+            ];
+            
             if (sim.sharedProps && sim.sharedProps.length > 0) {
-                html += '<div class="arch-similar-props">Shared: ' + sim.sharedProps.slice(0, 4).join(', ');
-                if (sim.sharedProps.length > 4) html += ' +' + (sim.sharedProps.length - 4);
-                html += '</div>';
+                let sharedText = 'Shared: ' + sim.sharedProps.slice(0, 4).join(', ');
+                if (sim.sharedProps.length > 4) sharedText += ' +' + (sim.sharedProps.length - 4);
+                itemChildren.push(h('div', { className: 'arch-similar-props' }, sharedText));
             }
-            html += '</div>';
-        }
-        html += '</div>';
+            
+            return h('div', { className: 'arch-similar-item' }, ...itemChildren);
+        });
+        
+        sections.push(h('div', { className: 'arch-section' },
+            h('h4', { className: 'arch-section-title' }, '🔄 Similar Components'),
+            ...similarItems
+        ));
     }
 
+    // Issues
     if (smells && smells.length > 0) {
-        html += '<div class="arch-section">';
-        html += '<h4 class="arch-section-title">⚠️ Issues for ' + compName + '</h4>';
-        for (const smell of smells) {
+        const smellItems = smells.map((smell: any) => {
             const severityClass = smell.severity === 'error' ? 'smell-error' : smell.severity === 'warning' ? 'smell-warning' : 'smell-info';
-            html += '<div class="arch-smell ' + severityClass + '">';
-            html += '<div class="arch-smell-type">' + formatSmellType(smell.type) + '</div>';
-            html += '<div class="arch-smell-msg">' + smell.message + '</div>';
-            html += '<div class="arch-smell-suggestion">💡 ' + smell.suggestion + '</div>';
-            html += '</div>';
-        }
-        html += '</div>';
+            return h('div', { className: 'arch-smell ' + severityClass },
+                h('div', { className: 'arch-smell-type' }, formatSmellType(smell.type)),
+                h('div', { className: 'arch-smell-msg' }, smell.message),
+                h('div', { className: 'arch-smell-suggestion' }, '💡 ' + smell.suggestion)
+            );
+        });
+        
+        sections.push(h('div', { className: 'arch-section' },
+            h('h4', { className: 'arch-section-title' }, '⚠️ Issues for ' + compName),
+            ...smellItems
+        ));
     }
 
+    // Pass-Through Analysis
     if (state.ARCHITECTURE.passThroughComponents) {
         const passThrough = state.ARCHITECTURE.passThroughComponents.find((p: any) => p.name === compName);
         if (passThrough) {
-            html += '<div class="arch-section">';
-            html += '<h4 class="arch-section-title">📦 Pass-Through Analysis</h4>';
-            html += '<div class="arch-passthrough">';
-            html += '<div class="arch-passthrough-bar">';
-            html += '<div class="arch-passthrough-fill" style="width: ' + Math.round(passThrough.ratio * 100) + '%"></div>';
-            html += '</div>';
-            html += '<div class="arch-passthrough-label">';
-            html += passThrough.propsPassedThrough + ' of ' + passThrough.propsReceived + ' props passed through';
-            html += '</div>';
-            html += '</div>';
-            html += '</div>';
+            sections.push(h('div', { className: 'arch-section' },
+                h('h4', { className: 'arch-section-title' }, '📦 Pass-Through Analysis'),
+                h('div', { className: 'arch-passthrough' },
+                    h('div', { className: 'arch-passthrough-bar' },
+                        h('div', { className: 'arch-passthrough-fill', style: { width: Math.round(passThrough.ratio * 100) + '%' } })
+                    ),
+                    h('div', { className: 'arch-passthrough-label' },
+                        passThrough.propsPassedThrough + ' of ' + passThrough.propsReceived + ' props passed through'
+                    )
+                )
+            ));
         }
     }
 
-    // if (state.ARCHITECTURE.smells && state.ARCHITECTURE.smells.length > 0 && smells.length === 0) {
-    //     // Optionally show global issues
-    // }
-
-    return html;
+    return sections;
 }
 
 function renderDetailContent() {
@@ -579,10 +624,6 @@ function renderDetailContent() {
     const comp = node.component;
     const compName = comp?.name || 'Unknown';
     const staticComp = comp?.name ? getStaticComponent(comp.name) : null;
-    const source = node.source;
-    
-    // const hasFile = file && file !== 'unknown';
-    // const hasSource = !!source;
     
     const live = domEl && compName ? getLiveComponentData(domEl, compName) : { props: {}, state: [] };
     const liveHooks = domEl && compName ? getLiveHooks(domEl, compName) : [];
@@ -594,19 +635,22 @@ function renderDetailContent() {
     const smells = getArchSmellsForComponent(compName);
     const archUsage = getArchUsageForComponent(compName);
 
-    // Header logic
-    let headerHtml = `
-        <h2 class="detail-title">${compName}</h2>
-        <div class="detail-subtitle">
-            <span class="detail-file">${escapeHtml(file)}</span>
-    `;
-    
-    if (staticComp?.isClientComponent) headerHtml += '<span class="badge client">Use Client</span>';
-    if (staticComp?.isServerComponent) headerHtml += '<span class="badge server">Server Component</span>';
-    
-    headerHtml += '</div>';
-    
-    // Tabs logic
+    // 1. Header
+    const badges = [];
+    if (staticComp?.isClientComponent) badges.push(h('span', { className: 'badge client' }, 'Use Client'));
+    if (staticComp?.isServerComponent) badges.push(h('span', { className: 'badge server' }, 'Server Component'));
+
+    const header = h('div', { className: 'detail-header' },
+        h('div', {},
+            h('h2', { className: 'detail-title' }, compName),
+            h('div', { className: 'detail-subtitle' },
+                h('span', { className: 'detail-file' }, file),
+                ...badges
+            )
+        )
+    );
+
+    // 2. Tabs
     const tabs = [
         { id: 'props', label: 'Props', count: currentDataFlowGraph.propOrigins.length },
         { id: 'state', label: 'State & Hooks', count: (staticComp?.hooks?.length || 0) + (staticComp?.serverQueries?.length || 0) },
@@ -615,172 +659,201 @@ function renderDetailContent() {
         { id: 'source', label: 'Source', count: '' },
         { id: 'llm', label: 'Export for LLM', count: '' }
     ];
-    
-    let tabsHtml = '<div class="detail-tabs">';
-    for (const tab of tabs) {
-        const activeClass = currentTab === tab.id ? ' active' : '';
-        const countHtml = tab.count ? `<span class="tab-count">${tab.count}</span>` : '';
-        tabsHtml += `<div class="detail-tab${activeClass}" data-tab="${tab.id}">${tab.label}${countHtml}</div>`;
-    }
-    tabsHtml += '<button class="detail-close">×</button></div>';
 
-    let contentHtml = '';
+    const tabsContainer = h('div', { className: 'detail-tabs' },
+        ...tabs.map(tab => {
+            const countSpan = tab.count ? h('span', { className: 'tab-count' }, ` (${tab.count})`) : null;
+            return h('div', { 
+                className: `detail-tab${currentTab === tab.id ? ' active' : ''}`,
+                dataset: { tab: tab.id }
+            }, tab.label, countSpan);
+        }),
+        h('button', { className: 'detail-close' }, '×')
+    );
+
+    // 3. Content
+    let content: HTMLElement | HTMLElement[];
     
     if (currentTab === 'props') {
-        const flowData = selectedProp ? getPropFlow(compName, selectedProp) : null;
-        
-        if (selectedProp && flowData) {
-            contentHtml += `<div class="selected-prop-header">
-                <button class="back-to-props detail-tab" data-tab="props">← Back to all props</button>
-                <h3>Prop Analysis: <code>${selectedProp}</code></h3>
-            </div>`;
-            contentHtml += renderPropFlowGraph(flowData, selectedProp, compName);
-        } else {
-            if (currentDataFlowGraph.propOrigins.length === 0) {
-                contentHtml = '<div class="detail-empty">No props detected</div>';
-            } else {
-                for (const origin of currentDataFlowGraph.propOrigins) {
-                    const hasFlow = !!getPropFlow(compName, origin.propName);
-                    const flowClass = hasFlow ? ' has-flow' : '';
-                    const flowBadge = hasFlow ? '<span class="flow-badge">Flow ↗</span>' : '';
-                    
-                    contentHtml += `
-                        <div class="prop-row${flowClass}" data-prop="${origin.propName}">
-                            <div class="prop-key">
-                                ${origin.propName}
-                                ${origin.optional ? '<span class="ts-opt">?</span>' : ''}
-                                ${flowBadge}
-                            </div>
-                            <div class="prop-value">
-                                <span class="val">${formatValue(origin.value, 150)}</span>
-                                <span class="type">${origin.type || 'any'}</span>
-                            </div>
-                            <div class="prop-source">
-                                <span class="source-tag ${origin.source.source}">${origin.source.source}</span>
-                                ${origin.source.query ? `<span class="source-detail">${origin.source.query}()</span>` : ''}
-                                ${origin.source.hookName ? `<span class="source-detail">${origin.source.hookName}</span>` : ''}
-                            </div>
-                        </div>
-                    `;
-                }
-            }
-        }
+        content = renderPropsTab(compName, selectedProp, currentDataFlowGraph.propOrigins);
     } else if (currentTab === 'state') {
-        // ... (state rendering logic)
-        const staticHooks = staticComp?.hooks || [];
-        const serverQueries = staticComp?.serverQueries || [];
-        
-        if (staticHooks.length === 0 && serverQueries.length === 0) {
-            contentHtml = '<div class="detail-empty">No state or hooks detected</div>';
-        } else {
-            if (serverQueries.length > 0) {
-                contentHtml += '<div class="section-title">Server Queries</div>';
-                for (const q of serverQueries) {
-                    contentHtml += `
-                        <div class="prop-row">
-                            <div class="prop-key">${q}</div>
-                            <div class="prop-value"><span class="val">Async Data Fetch</span></div>
-                            <div class="prop-source"><span class="source-tag serverQuery">server</span></div>
-                        </div>
-                    `;
-                }
-            }
-            
-            if (staticHooks.length > 0) {
-                contentHtml += '<div class="section-title">Hooks</div>';
-                for (let i = 0; i < staticHooks.length; i++) {
-                    const hookName = staticHooks[i];
-                    const liveHook = liveHooks[i];
-                    const val = liveHook?.value;
-                    
-                    contentHtml += `
-                        <div class="prop-row">
-                            <div class="prop-key">${hookName}</div>
-                            <div class="prop-value"><span class="val">${liveHook ? formatValue(val) : '—'}</span></div>
-                        </div>
-                    `;
-                }
-            }
-        }
+        content = renderStateTab(staticComp, liveHooks);
     } else if (currentTab === 'graph') {
-         // ... (graph rendering logic)
-         // Assuming we don't have visual graph rendering yet, show summary
-         const edgeCount = currentDataFlowGraph.edges.length;
-         if (edgeCount === 0) {
-             contentHtml = '<div class="detail-empty">No data flow graph available</div>';
-         } else {
-             contentHtml += `
-                <div class="graph-summary">
-                    <p>Graph contains ${currentDataFlowGraph.nodes.length} nodes and ${edgeCount} edges.</p>
-                    <p>Visual graph rendering via Mermaid or similar library is recommended for export.</p>
-                </div>
-                <div class="export-actions">
-                    <button class="copy-mermaid-btn">📊 Copy Mermaid Diagram</button>
-                    <button class="copy-llm-btn">🤖 Copy JSON for LLM</button>
-                </div>
-                <div class="graph-preview">
-                    <pre>${generateMermaidDiagram(currentDataFlowGraph)}</pre>
-                </div>
-             `;
-         }
+        content = renderGraphTab(currentDataFlowGraph);
     } else if (currentTab === 'arch') {
-        contentHtml = renderArchitectureTab(compName, smells, archUsage);
-        
-        if (issues.length > 0 || refactorHints.length > 0) {
-            contentHtml += '<div class="arch-section">';
-            contentHtml += '<h4 class="arch-section-title">🔍 Local Analysis</h4>';
-            
-            if (issues.length > 0) {
-                for (const issue of issues) {
-                    contentHtml += `<div class="arch-smell smell-warning"><div class="arch-smell-msg">${issue}</div></div>`;
-                }
-            }
-            
-            if (refactorHints.length > 0) {
-                for (const hint of refactorHints) {
-                    contentHtml += `<div class="arch-smell smell-info"><div class="arch-smell-msg">💡 ${hint}</div></div>`;
-                }
-            }
-            contentHtml += '</div>';
-        }
+        const archElements = renderArchitectureTab(compName, smells, archUsage);
+        const localAnalysis = renderLocalAnalysis(issues, refactorHints);
+        content = h('div', {}, ...Array.isArray(archElements) ? archElements : [archElements], localAnalysis);
     } else if (currentTab === 'source') {
-        if (sourceLoadingState === 'loading') {
-            contentHtml = '<div class="loading"><div class="loading-spinner"></div><div class="loading-text">Loading source...</div></div>';
-        } else if (currentSourceCode) {
-            // Need filePath to verify
-            const staticComp = comp?.name ? getStaticComponent(comp.name) : null;
-            const filePath = node?.source?.fileName || node?.file || staticComp?.filePath || 'unknown';
-            contentHtml = renderSourceCode(currentSourceCode, filePath);
-        } else {
-            contentHtml = '<div class="detail-empty">Source not available</div>';
-        }
+        content = renderSourceTab(comp, node, staticComp);
     } else if (currentTab === 'llm') {
-        const live = domEl && compName ? getLiveComponentData(domEl, compName) : { props: {}, state: [] };
-        const liveHooks = domEl && compName ? getLiveHooks(domEl, compName) : [];
-        const exportData = generateLLMExport(currentDataFlowGraph, node, live.props || {}, liveHooks);
-        const json = JSON.stringify(exportData, null, 2);
-        
-        contentHtml = `
-            <div class="llm-export-container">
-                <div class="llm-header">
-                    <p>Context for LLM analysis (includes props, data flow, hooks, and issues)</p>
-                    <button class="copy-llm-btn">📋 Copy for LLM</button>
-                </div>
-                <pre class="llm-code"><code>${escapeHtml(json)}</code></pre>
-            </div>
-        `;
+        content = renderLlmTab(node, domEl, compName, live, liveHooks);
+    } else {
+        content = h('div', { className: 'detail-empty' }, 'Unknown tab');
     }
 
-    detailOverlay.innerHTML = `
-        <div class="detail-dialog">
-            <div class="detail-header">${headerHtml}</div>
-            ${tabsHtml}
-            <div class="detail-content custom-scrollbar">
-                ${contentHtml}
-            </div>
-        </div>
-    `;
+    // Clear and rebuild
+    detailOverlay.innerHTML = '';
+    const dialog = h('div', { className: 'detail-dialog' },
+        header,
+        tabsContainer,
+        h('div', { className: 'detail-content custom-scrollbar' }, content)
+    );
+    
+    detailOverlay.appendChild(dialog);
 }
+
+// Helpers for Tabs (extracted for clarity)
+
+function renderPropsTab(compName: string, selectedProp: string | null, propOrigins: any[]) {
+    if (selectedProp) {
+        const flowData = getPropFlow(compName, selectedProp);
+        if (!flowData) return h('div', { className: 'detail-empty' }, 'Flow data not found');
+        
+        return [
+            h('div', { className: 'selected-prop-header' },
+                h('button', { className: 'back-to-props detail-tab', dataset: { tab: 'props' } }, '← Back to all props'),
+                h('h3', {}, 'Prop Analysis: ', h('code', {}, selectedProp))
+            ),
+            h('div', { dangerouslySetInnerHTML: { __html: renderPropFlowGraph(flowData, selectedProp, compName) } }) // Legacy
+        ];
+    }
+
+    if (propOrigins.length === 0) return h('div', { className: 'detail-empty' }, 'No props detected');
+
+    return propOrigins.map(origin => {
+        const hasFlow = !!getPropFlow(compName, origin.propName);
+        
+        const sourceTags = [
+            h('span', { className: `source-tag ${origin.source.source}` }, origin.source.source)
+        ];
+        if (origin.source.query) sourceTags.push(h('span', { className: 'source-detail' }, `${origin.source.query}()`));
+        if (origin.source.hookName) sourceTags.push(h('span', { className: 'source-detail' }, origin.source.hookName));
+
+        return h('div', { 
+            className: `prop-row${hasFlow ? ' has-flow' : ''}`, 
+            dataset: { prop: origin.propName } 
+        },
+            h('div', { className: 'prop-key' }, 
+                origin.propName,
+                origin.optional ? h('span', { className: 'ts-opt' }, '?') : null,
+                hasFlow ? h('span', { className: 'flow-badge' }, 'Flow ↗') : null
+            ),
+            h('div', { className: 'prop-value' },
+                h('span', { className: 'val' }, formatValue(origin.value, 150)),
+                h('span', { className: 'type' }, origin.type || 'any')
+            ),
+            h('div', { className: 'prop-source' }, ...sourceTags)
+        );
+    });
+}
+
+function renderStateTab(staticComp: any, liveHooks: any[]) {
+    const staticHooks = staticComp?.hooks || [];
+    const serverQueries = staticComp?.serverQueries || [];
+    
+    if (staticHooks.length === 0 && serverQueries.length === 0) {
+        return h('div', { className: 'detail-empty' }, 'No state or hooks detected');
+    }
+    
+    const elements = [];
+    
+    if (serverQueries.length > 0) {
+        elements.push(h('div', { className: 'section-title' }, 'Server Queries'));
+        elements.push(...serverQueries.map((q: string) => h('div', { className: 'prop-row' },
+            h('div', { className: 'prop-key' }, q),
+            h('div', { className: 'prop-value' }, h('span', { className: 'val' }, 'Async Data Fetch')),
+            h('div', { className: 'prop-source' }, h('span', { className: 'source-tag serverQuery' }, 'server'))
+        )));
+    }
+    
+    if (staticHooks.length > 0) {
+        elements.push(h('div', { className: 'section-title' }, 'Hooks'));
+        elements.push(...staticHooks.map((hookName: string, i: number) => {
+            const liveHook = liveHooks[i];
+            const val = liveHook?.value;
+            return h('div', { className: 'prop-row' },
+                h('div', { className: 'prop-key' }, hookName),
+                h('div', { className: 'prop-value' }, h('span', { className: 'val' }, liveHook ? formatValue(val) : '—'))
+            );
+        }));
+    }
+    
+    return elements;
+}
+
+function renderGraphTab(graph: any) {
+    const edgeCount = graph.edges.length;
+    if (edgeCount === 0) return h('div', { className: 'detail-empty' }, 'No data flow graph available');
+
+    return [
+        h('div', { className: 'graph-summary' },
+            h('p', {}, `Graph contains ${graph.nodes.length} nodes and ${edgeCount} edges.`),
+            h('p', {}, 'Visual graph rendering via Mermaid or similar library is recommended for export.')
+        ),
+        h('div', { className: 'export-actions' },
+            h('button', { className: 'copy-mermaid-btn' }, '📊 Copy Mermaid Diagram'),
+            h('button', { className: 'copy-llm-btn' }, '🤖 Copy JSON for LLM')
+        ),
+        h('div', { className: 'graph-preview' },
+            h('pre', {}, generateMermaidDiagram(graph))
+        )
+    ];
+}
+
+function renderLocalAnalysis(issues: string[], refactorHints: string[]) {
+    if (issues.length === 0 && refactorHints.length === 0) return null;
+    
+    const elements = [h('h4', { className: 'arch-section-title' }, '🔍 Local Analysis')];
+    
+    if (issues.length > 0) {
+        elements.push(...issues.map(issue => 
+            h('div', { className: 'arch-smell smell-warning' }, 
+                h('div', { className: 'arch-smell-msg' }, issue)
+            )
+        ));
+    }
+    
+    if (refactorHints.length > 0) {
+        elements.push(...refactorHints.map(hint => 
+            h('div', { className: 'arch-smell smell-info' }, 
+                h('div', { className: 'arch-smell-msg' }, '💡 ' + hint)
+            )
+        ));
+    }
+    
+    return h('div', { className: 'arch-section' }, ...elements);
+}
+
+function renderSourceTab(comp: any, node: any, staticComp: any) {
+    if (sourceLoadingState === 'loading') {
+        return h('div', { className: 'loading' },
+            h('div', { className: 'loading-spinner' }),
+            h('div', { className: 'loading-text' }, 'Loading source...')
+        );
+    } else if (currentSourceCode) {
+        const filePath = node?.source?.fileName || node?.file || staticComp?.filePath || 'unknown';
+        return renderSourceCode(currentSourceCode, filePath);
+    } else {
+        return h('div', { className: 'detail-empty' }, 'Source not available');
+    }
+}
+
+function renderLlmTab(node: any, domEl: any, compName: string, live: any, liveHooks: any) {
+    const exportData = generateLLMExport(currentDataFlowGraph, node, live.props || {}, liveHooks);
+    const json = JSON.stringify(exportData, null, 2);
+    
+    return [
+        h('div', { className: 'llm-header' },
+            h('p', {}, 'Context for LLM analysis (includes props, data flow, hooks, and issues)'),
+            h('button', { className: 'copy-llm-btn' }, '📋 Copy for LLM')
+        ),
+        h('pre', { className: 'llm-code' },
+            h('code', {}, json)
+        )
+    ];
+}
+
 
 // Assign to callbacks
 callbacks.showDetail = showDetailDialog;
