@@ -15,13 +15,17 @@
     "route": "tsx src/cli.ts route",
     "overlay": "tsx src/cli.ts overlay",
     "visualize": "tsx src/visualize.ts",
-    "serve": "tsx src/cli.ts serve",
-    "serve:watch": "tsx watch src/cli.ts serve",
+    "serve": "npm run build:overlay && tsx src/cli.ts serve",
+    "serve:watch": "npm run build:overlay && tsx watch src/cli.ts serve",
     "component-prop": "tsx src/cli.ts component-prop",
     "mcp": "tsx src/mcp.ts",
     "deps": "tsx src/cli.ts analyze --only deps",
     "debug": "tsx src/cli.ts debug",
-    "verify": "tsx src/verify-tree.ts"
+    "verify": "tsx src/verify-tree.ts",
+    "gather-stats": "tsx src/cli.ts gather-stats",
+    "local-overlay": "npm run build:overlay && tsx src/cli.ts serve --static-data ./test-data/stats.json",
+    "build:overlay": "esbuild src/overlay/client/index.ts --bundle --outfile=dist/overlay.js --format=iife --platform=browser",
+    "watch:overlay": "npm run build:overlay -- --watch"
   },
   "keywords": [
     "analyzer",
@@ -32,6 +36,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.10.0",
+    "esbuild": "^0.27.3",
     "tsx": "^4.7.0",
     "typescript": "^5.3.0",
     "vitest": "^2.1.0"
