@@ -199,6 +199,9 @@ export function mount(initialData?: any) {
         buildStaticComponentMap(state.STATIC_TREE);
         renderPanel();
         setTimeout(() => { if (!state.isOpen) toggle(); }, 100);
+        
+        // Also need to get Fiber tree to show fiber-specific info and stats
+        setTimeout(() => waitForFiberTree(), 100);
     } else {
         refreshAnalysis();
         waitForFiberTree();

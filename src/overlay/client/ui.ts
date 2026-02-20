@@ -12,6 +12,7 @@ import {
 import { hideHoverHighlight, hideSelectedHighlight, showHoverHighlight, showSelectedHighlight } from './highlight';
 import { showDetailDialog } from './details';
 import { getFilterEnabled, getStaticComponent, refreshAnalysis, toggle, toggleFilter } from './logic';
+import { showSettingsDialog } from './settings';
 
 function nodeMatchesSearch(node: any, term: string): boolean {
     if (!term) return true;
@@ -248,8 +249,14 @@ function attachPanelEvents() {
     const pauseBtn = state.shadow.querySelector('.pause-btn');
     const refreshBtn = state.shadow.querySelector('.refresh-btn');
     const filterBtn = state.shadow.querySelector('.filter-btn');
+    const settingsBtn = state.shadow.querySelector('.settings-btn');
 
     toggleBtn?.addEventListener('click', e => { e.stopPropagation(); e.stopImmediatePropagation(); toggle(); }, { capture: true });
+
+    settingsBtn?.addEventListener('click', e => {
+        e.stopPropagation(); e.stopImmediatePropagation();
+        showSettingsDialog();
+    }, { capture: true });
 
     refreshBtn?.addEventListener('click', e => {
         e.stopPropagation(); e.stopImmediatePropagation();
@@ -297,6 +304,7 @@ function attachPanelEvents() {
         e.stopPropagation(); e.stopImmediatePropagation();
         state.isPaused = !state.isPaused;
         renderPanel();
+        if (callbacks.onToggle) callbacks.onToggle(state.isOpen);
     }, { capture: true });
 
     const treeEl = state.shadow.querySelector('.tree');
@@ -411,10 +419,11 @@ function attachNodeEvents() {
 
             if (domEl && isInDocument) {
                 showSelectedHighlight(domEl, name);
-                if (isRealNode) {
-                    domEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                } else if (domEl._elements?.[0]) {
-                    domEl._elements[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const treeEl = state.shadow?.querySelector('.tree');
+                if (treeEl) {
+                    const rect = header.getBoundingClientRect();
+                    const treeRect = treeEl.getBoundingClientRect();
+                    treeEl.scrollTop += (rect.top - treeRect.top) - (treeRect.height / 2) + (rect.height / 2);
                 }
             } else {
                 hideSelectedHighlight();
@@ -527,8 +536,12 @@ function attachNodeEvents() {
                 const name = treeNode.component?.name || '—';
                 if (domEl) {
                     showSelectedHighlight(domEl, name + ' (' + (idx + 1) + ')');
-                    const realEl = domEl instanceof Node ? domEl : domEl._elements?.[0];
-                    if (realEl) realEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    const treeEl = state.shadow?.querySelector('.tree');
+                    if (treeEl) {
+                        const rect = row.getBoundingClientRect();
+                        const treeRect = treeEl.getBoundingClientRect();
+                        treeEl.scrollTop += (rect.top - treeRect.top) - (treeRect.height / 2) + (rect.height / 2);
+                    }
                 }
             }
         }, { capture: true });
@@ -571,7 +584,12 @@ export function selectTreeNodeById(nodeId: string): boolean {
     if (header) {
         header.classList.add('selected');
         setTimeout(() => {
-            header.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const treeEl = state.shadow?.querySelector('.tree');
+            if (treeEl) {
+                const rect = header.getBoundingClientRect();
+                const treeRect = treeEl.getBoundingClientRect();
+                treeEl.scrollTop += (rect.top - treeRect.top) - (treeRect.height / 2) + (rect.height / 2);
+            }
             if (window.__updateStickyParents) window.__updateStickyParents();
         }, 100);
     }
