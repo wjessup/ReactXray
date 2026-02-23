@@ -187,9 +187,6 @@ export function mount(initialData?: any) {
       if (state.FIBER_TREE.length === 0 && attempts < 20) {
         setTimeout(() => waitForFiberTree(attempts + 1), 250);
       } else {
-        if (state.TREE.length > 0 || state.FIBER_TREE.length > 0) {
-            state.isLoading = false;
-        }
         renderPanel();
       }
     }
@@ -205,6 +202,7 @@ export function mount(initialData?: any) {
     } else {
         refreshAnalysis();
         waitForFiberTree();
+        setTimeout(() => { if (!state.isOpen) toggle(); }, 100);
     }
     
     loadComponentAllowlist();

@@ -14,11 +14,11 @@ function readBundle(): string {
   }
 }
 
-export function generateOverlayScript(data: RouteAnalysis): string {
-  const treeJson = JSON.stringify(data.componentTree);
-  const statsJson = JSON.stringify(data.stats);
-  const routeJson = JSON.stringify(data.route);
-  const archJson = JSON.stringify(data.architectureAnalysis || null);
+export function generateOverlayScript(data: RouteAnalysis | null): string {
+  const treeJson = JSON.stringify(data?.componentTree || []);
+  const statsJson = JSON.stringify(data?.stats || {});
+  const routeJson = JSON.stringify(data?.route || '');
+  const archJson = JSON.stringify(data?.architectureAnalysis || null);
 
   const bundleContent = readBundle();
 

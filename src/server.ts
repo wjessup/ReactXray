@@ -13,7 +13,7 @@ import type { ComponentTreeNode, RouteAnalysis } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-async function getOverlayGenerator(): Promise<(data: RouteAnalysis) => string> {
+async function getOverlayGenerator(): Promise<(data: RouteAnalysis | null) => string> {
   const cacheBuster = Date.now();
   const modulePath = path.resolve(__dirname, "./overlay/index.js");
   const moduleUrl = pathToFileURL(modulePath).href;
@@ -71,29 +71,12 @@ export function startServer(options: ServerOptions): void {
   async function getOverlayForRoute(route: string): Promise<string | null> {
     if (!projectPath) return null;
 
-    let result: RouteAnalysis;
+    let result: RouteAnalysis | null = null;
     const cached = analysisCache.get(route);
     
     if (cached && Date.now() - cached.time < CACHE_TTL) {
       result = cached.result;
       console.log(`  Using cached analysis for: ${route}`);
-    } else {
-      try {
-        console.log(`  Analyzing route: ${route}`);
-        result = await analyzeRoute(projectPath, route);
-        analysisCache.set(route, { result, time: Date.now() });
-        console.log(
-          `  ✓ Analyzed (${
-            result.stats.totalComponents
-          } components, ${countTreeNodes(result.componentTree)} tree nodes)`
-        );
-      } catch (err) {
-        console.error(
-          `  ✗ Failed to analyze route ${route}:`,
-          (err as Error).message
-        );
-        return null;
-      }
     }
 
     try {
