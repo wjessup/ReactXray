@@ -118,8 +118,11 @@ function countServerOnlyNodes(nodes: any[]): number {
     }, 0);
 }
 
-function countNodes(nodes: any[]): number {
-    return nodes.reduce((acc, n) => acc + 1 + countNodes(n.children), 0);
+function countClientNodes(nodes: any[]): number {
+    return nodes.reduce((acc, n) => {
+        const isClient = n.component?.isClientComponent || n.isBridge ? 1 : 0;
+        return acc + isClient + countClientNodes(n.children || []);
+    }, 0);
 }
 
 let lastSavedTreeHash = '';
@@ -158,15 +161,26 @@ export function refreshFiberTree() {
     state.TREE = mergeStaticWithFiber(JSON.parse(JSON.stringify(state.STATIC_TREE)), fiberLookup);
 
     const serverCount = countServerOnlyNodes(state.TREE);
-    const clientCount = countNodes(state.TREE) - serverCount;
+    const clientCount = countClientNodes(state.TREE);
+    
+    // Count total actual components (excluding slots like {children})
+    function countValidComponents(nodes: any[]): number {
+        return nodes.reduce((acc, n) => {
+            const isComp = n.component ? 1 : 0;
+            return acc + isComp + countValidComponents(n.children || []);
+        }, 0);
+    }
+    
     state.STATS = {
-        totalComponents: countNodes(state.TREE),
+        totalComponents: countValidComponents(state.TREE),
         serverComponents: serverCount,
         clientComponents: clientCount,
         fiberNodes: fiberLookup.size,
     };
     
-    callbacks.render();
+    if (!state.isLoading) {
+        callbacks.render();
+    }
     saveCalculatedTree();
 }
 

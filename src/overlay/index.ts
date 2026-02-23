@@ -23,6 +23,9 @@ export function generateOverlayScript(data: RouteAnalysis | null): string {
   const bundleContent = readBundle();
 
   return `(function() {
+    if (window.__REPO_OVERLAY_MOUNTED__) return;
+    window.__REPO_OVERLAY_MOUNTED__ = true;
+    
     window.__REPO_DATA__ = {
       STATIC_TREE: ${treeJson},
       STATS: ${statsJson},
