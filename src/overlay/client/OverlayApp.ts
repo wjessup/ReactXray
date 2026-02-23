@@ -174,12 +174,15 @@ export function mount(initialData?: any) {
     state.container = document.createElement('div');
     state.shadow.appendChild(state.container);
 
-    document.body.appendChild(state.host);
-
-    setupRenderTracking();
-    
-    // Initial Render
-    renderPanel();
+    let hasMountedDom = false;
+    function ensureDomMounted() {
+        if (!hasMountedDom && document.body) {
+            document.body.appendChild(state.host!);
+            setupRenderTracking();
+            renderPanel();
+            hasMountedDom = true;
+        }
+    }
     
     // Start loop to find tree
     function waitForFiberTree(attempts = 0) {
@@ -187,9 +190,7 @@ export function mount(initialData?: any) {
       if (state.FIBER_TREE.length === 0 && attempts < 20) {
         setTimeout(() => waitForFiberTree(attempts + 1), 250);
       } else {
-        if (state.TREE.length > 0 || state.FIBER_TREE.length > 0) {
-            state.isLoading = false;
-        }
+        ensureDomMounted();
         renderPanel();
       }
     }
@@ -197,7 +198,7 @@ export function mount(initialData?: any) {
     if (state.STATIC_TREE && state.STATIC_TREE.length > 0) {
         state.isLoading = false;
         buildStaticComponentMap(state.STATIC_TREE);
-        renderPanel();
+        ensureDomMounted();
         setTimeout(() => { if (!state.isOpen) toggle(); }, 100);
         
         // Also need to get Fiber tree to show fiber-specific info and stats
@@ -205,6 +206,7 @@ export function mount(initialData?: any) {
     } else {
         refreshAnalysis();
         waitForFiberTree();
+        setTimeout(() => { ensureDomMounted(); if (!state.isOpen) toggle(); }, 100);
     }
     
     loadComponentAllowlist();

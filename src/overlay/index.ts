@@ -14,15 +14,18 @@ function readBundle(): string {
   }
 }
 
-export function generateOverlayScript(data: RouteAnalysis): string {
-  const treeJson = JSON.stringify(data.componentTree);
-  const statsJson = JSON.stringify(data.stats);
-  const routeJson = JSON.stringify(data.route);
-  const archJson = JSON.stringify(data.architectureAnalysis || null);
+export function generateOverlayScript(data: RouteAnalysis | null): string {
+  const treeJson = JSON.stringify(data?.componentTree || []);
+  const statsJson = JSON.stringify(data?.stats || {});
+  const routeJson = JSON.stringify(data?.route || '');
+  const archJson = JSON.stringify(data?.architectureAnalysis || null);
 
   const bundleContent = readBundle();
 
   return `(function() {
+    if (window.__REPO_OVERLAY_MOUNTED__) return;
+    window.__REPO_OVERLAY_MOUNTED__ = true;
+    
     window.__REPO_DATA__ = {
       STATIC_TREE: ${treeJson},
       STATS: ${statsJson},

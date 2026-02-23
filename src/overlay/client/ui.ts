@@ -219,7 +219,7 @@ export function renderPanel() {
           <div class="stats">
             <div class="stat"><span class="stat-value">${state.STATS.totalComponents || 0}</span><span class="stat-label">total</span></div>
             <div class="stat"><span class="stat-value" style="color:#7ee787">${state.STATS.serverComponents || 0}</span><span class="stat-label">server</span></div>
-            <div class="stat"><span class="stat-value" style="color:#58a6ff">${state.STATS.fiberNodes || 0}</span><span class="stat-label">client</span></div>
+            <div class="stat"><span class="stat-value" style="color:#58a6ff">${state.STATS.clientComponents || 0}</span><span class="stat-label">client</span></div>
             <div class="stat"><span class="stat-value" id="total-renders" style="color:#f85149">${state.totalRenders}</span><span class="stat-label">renders</span></div>
           </div>
           <div class="route">${state.ROUTE}</div>
