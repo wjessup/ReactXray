@@ -9,6 +9,7 @@ export {
   findHooks,
   findServerQueries,
   extractComponentFromFile,
+  extractAllComponentsFromFile,
   extractJsxUsage,
   extractJsxChildren,
   extractJsxExports,

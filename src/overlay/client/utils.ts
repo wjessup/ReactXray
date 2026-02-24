@@ -96,35 +96,103 @@ export function isOverlayElement(el: any): boolean {
 }
 
 export function findReactRoot(): any {
-    const candidates = [
+    // Try specific known IDs first, then scan body children, then fallback to body/html
+    const specificCandidates = [
         document.getElementById('root'),
         document.getElementById('__next'),
-        document.documentElement,
-        document.body
-    ].filter(Boolean);
+        document.getElementById('app'),
+        document.getElementById('__app'),
+    ].filter(Boolean) as HTMLElement[];
 
-    for (const el of candidates as HTMLElement[]) {
-        const containerKey = Object.keys(el).find(k =>
-            k.startsWith('__reactContainer$') || k.startsWith('_reactRootContainer')
-        );
-        if (containerKey) {
-            // @ts-ignore
-            const container = el[containerKey];
-            if (container?.current) return container;
-            if (container?._internalRoot) return container._internalRoot;
-            if (container) return container;
-        }
-
-        const fiberKey = Object.keys(el).find(k => k.startsWith('__reactFiber$'));
-        if (fiberKey) {
-            // @ts-ignore
-            let fiber = el[fiberKey];
-            while (fiber.return) {
-                fiber = fiber.return;
+    // Also scan direct children of body for any React root
+    const bodyChildren: HTMLElement[] = [];
+    if (document.body) {
+        for (let i = 0; i < document.body.children.length; i++) {
+            const child = document.body.children[i] as HTMLElement;
+            if (child && !specificCandidates.includes(child)) {
+                bodyChildren.push(child);
             }
-            return { current: fiber };
         }
     }
+
+    const fallbackCandidates = [document.body, document.documentElement].filter(Boolean) as HTMLElement[];
+    const allCandidates = [...specificCandidates, ...bodyChildren, ...fallbackCandidates];
+
+    for (const el of allCandidates) {
+        const result = findRootFromElement(el);
+        if (result) return result;
+    }
+
+    // Fallback: try React DevTools global hook
+    const hook = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (hook) {
+        // React DevTools hook stores fiber roots in a Map
+        const fiberRoots = hook._fiberRoots || hook.fiberRoots;
+        if (fiberRoots && fiberRoots.size > 0) {
+            const firstRoot = fiberRoots.values().next().value;
+            if (firstRoot?.current) return firstRoot;
+        }
+
+        // Also check renderers for roots
+        if (hook.renderers) {
+            for (const [, renderer] of hook.renderers) {
+                if (renderer?.findFiberByHostInstance) {
+                    // Try to get fiber from known root elements
+                    for (const el of specificCandidates) {
+                        const fiber = renderer.findFiberByHostInstance(el);
+                        if (fiber) {
+                            let root = fiber;
+                            while (root.return) root = root.return;
+                            return { current: root };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+function findRootFromElement(el: HTMLElement): any {
+    const keys = Object.keys(el);
+
+    // Check for React 18 createRoot container key
+    const containerKey = keys.find(k =>
+        k.startsWith('__reactContainer$') || k.startsWith('_reactRootContainer')
+    );
+    if (containerKey) {
+        // @ts-ignore
+        const container = el[containerKey];
+        // React 18 createRoot: container is a FiberRootNode with .current
+        if (container?.current) return container;
+        // React 17 ReactDOM.render: container has _internalRoot.current
+        if (container?._internalRoot?.current) return container._internalRoot;
+        // React 18: __reactContainer$ sometimes stores a fiber node directly
+        // Walk up to the root fiber and wrap it
+        if (container && container.tag !== undefined) {
+            let fiber = container;
+            while (fiber.return) fiber = fiber.return;
+            // If this fiber is the HostRoot (tag 3), its stateNode is the FiberRootNode
+            if (fiber.stateNode?.current) return fiber.stateNode;
+            return { current: fiber };
+        }
+        if (container) return container;
+    }
+
+    // Check for React fiber key on the element
+    const fiberKey = keys.find(k =>
+        k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+    );
+    if (fiberKey) {
+        // @ts-ignore
+        let fiber = el[fiberKey];
+        while (fiber.return) fiber = fiber.return;
+        // HostRoot fiber's stateNode is the FiberRootNode
+        if (fiber.stateNode?.current) return fiber.stateNode;
+        return { current: fiber };
+    }
+
     return null;
 }
 

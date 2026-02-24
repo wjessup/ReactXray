@@ -25,6 +25,7 @@ import type {
 } from "../types.js";
 import {
   extractComponentFromFile,
+  extractAllComponentsFromFile,
   findHooks,
   extractJsxChildren,
   extractJsxUsage,
@@ -279,6 +280,7 @@ export async function analyzeRoute(
   );
 
   const componentMap = new Map<string, ComponentInfo>();
+  const componentByName = new Map<string, ComponentInfo>();
   const jsxUsageMap = new Map<string, JsxUsage>();
   const enhancedJsxUsageMap = new Map<string, EnhancedJsxUsage>();
   const nameToFileMap = new Map<string, string>();
@@ -288,10 +290,15 @@ export async function analyzeRoute(
       const sourceFile = project.getSourceFile(absPath);
       if (sourceFile) {
         const relPath = path.relative(targetPath, absPath);
-        const info = extractComponentFromFile(sourceFile, relPath);
-        if (info) {
-          componentMap.set(relPath, info);
-          nameToFileMap.set(info.name, relPath);
+        const allInfos = extractAllComponentsFromFile(sourceFile, relPath);
+        if (allInfos.length > 0) {
+          // Primary component for the file (used for componentMap, architecture analysis)
+          componentMap.set(relPath, allInfos[0]);
+          // All components indexed by name (for tree node lookup)
+          for (const info of allInfos) {
+            nameToFileMap.set(info.name, relPath);
+            componentByName.set(info.name, info);
+          }
         }
         const jsxUsage = extractJsxUsage(sourceFile);
         jsxUsageMap.set(relPath, jsxUsage);
@@ -330,8 +337,9 @@ export async function analyzeRoute(
     enhancedJsxUsageMap,
     nameToFileMap,
     componentMap,
+    componentByName,
   );
-  const allComponents = Array.from(componentMap.values());
+  const allComponents = Array.from(componentByName.values());
 
   const architectureAnalysis = await buildArchitectureAnalysis(
     project,
@@ -688,6 +696,7 @@ function buildComponentTree(
   jsxUsageMap: Map<string, EnhancedJsxUsage>,
   nameToFileMap: Map<string, string>,
   componentMap: Map<string, ComponentInfo>,
+  componentByName: Map<string, ComponentInfo>,
 ): ComponentTreeNode[] {
   function getDirectJsxFromFile(file: string): string[] {
     const jsxUsage = jsxUsageMap.get(file);
@@ -707,29 +716,30 @@ function buildComponentTree(
       }
     }
 
-    const childToParent = new Map<string, string>();
-    for (const [parentName, nested] of jsxUsage.nestedInComponent) {
+    // For project components nested under non-project wrappers (e.g. <Route element={<Index />}>),
+    // walk through the nesting hierarchy and collect them.
+    // We only skip if the immediate parent is already a collected project component.
+    const collected = new Set<string>(allComponents);
+
+    function collectFromNonProjectParent(parentName: string) {
+      const nested = jsxUsage!.nestedInComponent.get(parentName);
+      if (!nested) return;
       for (const childName of nested) {
-        childToParent.set(childName, parentName);
-      }
-    }
-
-    function hasProjectAncestor(name: string): boolean {
-      let current = childToParent.get(name);
-      while (current) {
-        if (nameToFileMap.has(current)) return true;
-        current = childToParent.get(current);
-      }
-      return false;
-    }
-
-    for (const [parentName, nested] of jsxUsage.nestedInComponent) {
-      if (!nameToFileMap.has(parentName)) {
-        for (const name of nested) {
-          if (nameToFileMap.has(name) && !hasProjectAncestor(name)) {
-            allComponents.add(name);
+        if (nameToFileMap.has(childName)) {
+          if (!collected.has(childName)) {
+            allComponents.add(childName);
+            collected.add(childName);
           }
+        } else {
+          // Recurse through non-project wrapper components
+          collectFromNonProjectParent(childName);
         }
+      }
+    }
+
+    for (const [parentName] of jsxUsage.nestedInComponent) {
+      if (!nameToFileMap.has(parentName) && !collected.has(parentName)) {
+        collectFromNonProjectParent(parentName);
       }
     }
 
@@ -763,20 +773,37 @@ function buildComponentTree(
     return { expression: match.expression, branch: match.branch };
   }
 
+  // Circular detection uses component names (not file paths) because
+  // multiple components can be exported from the same file (e.g. shadcn UI).
+  function isCircular(childName: string, childFile: string, visited: Set<string>): boolean {
+    // Use "componentName@file" as the key to detect true circular references
+    const key = `${childName}@${childFile}`;
+    return visited.has(key);
+  }
+
+  function addToPath(name: string | null, file: string, visited: Set<string>): Set<string> {
+    const next = new Set(visited);
+    if (name) next.add(`${name}@${file}`);
+    // Also add the bare file for entry-point files (no component name)
+    else next.add(`@${file}`);
+    return next;
+  }
+
   function buildFromFile(
     file: string,
     callerJsxUsage: EnhancedJsxUsage | null,
     fromComponentName: string | null,
     ancestorPath: Set<string>,
   ): ComponentTreeNode {
-    if (ancestorPath.has(file)) {
+    const myKey = fromComponentName ? `${fromComponentName}@${file}` : `@${file}`;
+    if (ancestorPath.has(myKey)) {
       return {
         file: `${file} (circular)`,
         component: componentMap.get(file) || null,
         children: [],
       };
     }
-    const currentPath = new Set(ancestorPath).add(file);
+    const currentPath = addToPath(fromComponentName, file, ancestorPath);
 
     const children: ComponentTreeNode[] = [];
     const fileJsxUsage = jsxUsageMap.get(file);
@@ -788,7 +815,7 @@ function buildComponentTree(
 
     for (const childName of passedAsChildren) {
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !currentPath.has(childFile)) {
+      if (childFile && !isCircular(childName, childFile, currentPath)) {
         const nestedInChild =
           callerJsxUsage?.nestedInComponent.get(childName) || [];
         children.push(
@@ -808,7 +835,7 @@ function buildComponentTree(
         callerJsxUsage.inferredInComponent.get(fromComponentName) || [];
       for (const childName of inferredChildren) {
         const childFile = nameToFileMap.get(childName);
-        if (childFile && !currentPath.has(childFile)) {
+        if (childFile && !isCircular(childName, childFile, currentPath)) {
           children.push(
             buildFromFile(
               childFile,
@@ -829,24 +856,27 @@ function buildComponentTree(
       if (alreadyAdded) continue;
 
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !currentPath.has(childFile)) {
+      if (childFile && !isCircular(childName, childFile, currentPath)) {
         const childNode = buildFromFile(
           childFile,
           fileJsxUsage || null,
           childName,
           currentPath,
         );
-        
+
         const condition = getRenderCondition(file, null, childName);
         if (condition) {
           childNode.renderCondition = condition;
         }
-        
+
         children.push(childNode);
       }
     }
 
-    return { file, component: componentMap.get(file) || null, children };
+    const comp = fromComponentName
+      ? componentByName.get(fromComponentName) || componentMap.get(file) || null
+      : componentMap.get(file) || null;
+    return { file, component: comp, children };
   }
 
   function buildWithPassedChildren(
@@ -856,21 +886,22 @@ function buildComponentTree(
     callerJsxUsage: EnhancedJsxUsage | null,
     ancestorPath: Set<string>,
   ): ComponentTreeNode {
-    if (ancestorPath.has(file)) {
+    const myKey = `${componentName}@${file}`;
+    if (ancestorPath.has(myKey)) {
       return {
         file: `${file} (circular)`,
         component: componentMap.get(file) || null,
         children: [],
       };
     }
-    const currentPath = new Set(ancestorPath).add(file);
+    const currentPath = addToPath(componentName, file, ancestorPath);
 
     const children: ComponentTreeNode[] = [];
     const fileJsxUsage = jsxUsageMap.get(file);
 
     for (const childName of passedChildren) {
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !currentPath.has(childFile)) {
+      if (childFile && !isCircular(childName, childFile, currentPath)) {
         const nestedInChild =
           callerJsxUsage?.nestedInComponent.get(childName) || [];
         children.push(
@@ -890,7 +921,7 @@ function buildComponentTree(
         callerJsxUsage.inferredInComponent.get(componentName) || [];
       for (const childName of inferredChildren) {
         const childFile = nameToFileMap.get(childName);
-        if (childFile && !currentPath.has(childFile)) {
+        if (childFile && !isCircular(childName, childFile, currentPath)) {
           children.push(
             buildFromFile(
               childFile,
@@ -911,24 +942,25 @@ function buildComponentTree(
       if (alreadyAdded) continue;
 
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !currentPath.has(childFile)) {
+      if (childFile && !isCircular(childName, childFile, currentPath)) {
         const childNode = buildFromFile(
           childFile,
           fileJsxUsage || null,
           childName,
           currentPath,
         );
-        
+
         const condition = getRenderCondition(file, null, childName);
         if (condition) {
           childNode.renderCondition = condition;
         }
-        
+
         children.push(childNode);
       }
     }
 
-    return { file, component: componentMap.get(file) || null, children };
+    const comp = componentByName.get(componentName) || componentMap.get(file) || null;
+    return { file, component: comp, children };
   }
 
   const buildNode = (

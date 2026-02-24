@@ -23,7 +23,11 @@ export function looksLikeComponent(node: Node, name?: string): boolean {
   const text = node.getText();
   const hasJsx = text.includes("<") || text.includes("jsx");
   const returnsNull = /return\s+null\s*[;\n}]/.test(text);
-  return text.includes("return") && (hasJsx || returnsNull);
+  const hasReturn = text.includes("return");
+  // Arrow functions with implicit return (no block body) don't contain "return"
+  const hasImplicitReturn =
+    (Node.isArrowFunction(node) && !Node.isBlock(node.getBody()));
+  return (hasReturn || hasImplicitReturn) && (hasJsx || returnsNull);
 }
 
 export function getJsxTagName(node: Node): string | null {
