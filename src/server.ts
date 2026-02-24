@@ -181,6 +181,45 @@ function startProxyServer(
         return;
       }
 
+      if (req.url?.startsWith("/__overlay_deps.json")) {
+        const url = new URL(req.url, `http://localhost:${port}`);
+        const route = url.searchParams.get("route") || "/";
+        try {
+          const result = await analyzeRoute(projectPath!, route);
+          const pageAbsPath = result.entryFiles.page;
+          if (!pageAbsPath) {
+             res.statusCode = 404;
+             res.end(JSON.stringify({ error: "No page entry file found" }));
+             return;
+          }
+          const relPagePath = path.relative(projectPath!, pageAbsPath).replace(/\\/g, '/');
+          
+          const depsIndexPath = path.join(outputPath, 'deps', 'index.json');
+          const depsIndexStr = await fs.readFile(depsIndexPath, 'utf-8');
+          const depsIndex = JSON.parse(depsIndexStr);
+          
+          const screen = depsIndex.screens.find((s: any) => s.pagePath.replace(/\\/g, '/') === relPagePath);
+          
+          if (!screen) {
+             res.statusCode = 404;
+             res.end(JSON.stringify({ error: "Screen not found in deps index" }));
+             return;
+          }
+          
+          const screenFile = path.join(outputPath, 'deps', screen.file);
+          const screenData = await fs.readFile(screenFile, 'utf-8');
+          
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Cache-Control", "no-cache");
+          res.setHeader("Access-Control-Allow-Origin", "*");
+          res.end(screenData);
+        } catch(err) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: (err as Error).message }));
+        }
+        return;
+      }
+
       if (req.url?.startsWith("/__overlay_allowlist.json")) {
         try {
           const allowlist = await getComponentAllowlist();
