@@ -1,6 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
 import type { RouteEntryFiles } from "../types.js";
+import { resolveGenericReactEntry } from "./entry.js";
+import { fileExists } from "./fs-utils.js";
 
 interface RoutePath {
   dirs: string[];
@@ -139,106 +141,3 @@ async function findConventionFile(
   return null;
 }
 
-async function resolveGenericReactEntry(
-  targetPath: string
-): Promise<RouteEntryFiles> {
-  // Common entry point patterns for Vite, CRA, and other React setups
-  const entryPatterns = [
-    "src/App.tsx",
-    "src/App.jsx",
-    "src/App.ts",
-    "src/App.js",
-    "src/app.tsx",
-    "src/app.jsx",
-    "App.tsx",
-    "App.jsx",
-  ];
-
-  let entryFile: string | null = null;
-  for (const pattern of entryPatterns) {
-    const fullPath = path.join(targetPath, pattern);
-    if (await fileExists(fullPath)) {
-      entryFile = fullPath;
-      break;
-    }
-  }
-
-  if (!entryFile) {
-    // Try to find the entry from main.tsx/index.tsx by looking for a root render call
-    const mainPatterns = [
-      "src/main.tsx",
-      "src/main.jsx",
-      "src/index.tsx",
-      "src/index.jsx",
-      "index.tsx",
-      "index.jsx",
-    ];
-
-    for (const pattern of mainPatterns) {
-      const fullPath = path.join(targetPath, pattern);
-      if (await fileExists(fullPath)) {
-        // Read the main file and look for the App component import
-        try {
-          const content = await fs.readFile(fullPath, "utf-8");
-          // Look for import of a component: import App from './App' or './components/App.tsx'
-          const appImportMatch = content.match(
-            /import\s+(\w+)\s+from\s+['"](\.\/[^'"]+)['"]/
-          );
-          if (appImportMatch) {
-            const importPath = appImportMatch[2];
-            const baseDir = path.dirname(fullPath);
-            // Try the import path as-is first (e.g. './components/App.tsx')
-            const directPath = path.join(baseDir, importPath);
-            if (await fileExists(directPath)) {
-              entryFile = directPath;
-            } else {
-              // Try adding extensions
-              for (const ext of [".tsx", ".jsx", ".ts", ".js"]) {
-                const appPath = path.join(baseDir, `${importPath}${ext}`);
-                if (await fileExists(appPath)) {
-                  entryFile = appPath;
-                  break;
-                }
-              }
-              // Try as directory with index file
-              if (!entryFile) {
-                for (const ext of [".tsx", ".jsx", ".ts", ".js"]) {
-                  const indexPath = path.join(baseDir, importPath, `index${ext}`);
-                  if (await fileExists(indexPath)) {
-                    entryFile = indexPath;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-          if (!entryFile) {
-            // If we can't find the App, use the main file itself
-            entryFile = fullPath;
-          }
-        } catch {
-          // Ignore read errors
-        }
-        break;
-      }
-    }
-  }
-
-  return {
-    layouts: [],
-    page: entryFile,
-    loading: null,
-    error: null,
-    template: null,
-    notFound: null,
-  };
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
