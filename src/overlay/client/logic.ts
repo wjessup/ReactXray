@@ -211,6 +211,22 @@ export async function refreshAnalysis() {
         state.ROUTE = window.location.pathname;
         lastAnalyzedRoute = state.ROUTE;
 
+        // Non-blocking fetch for deps
+        fetch('/__overlay_deps.json?route=' + encodeURIComponent(window.location.pathname))
+            .then(r => r.json())
+            .then(depsData => {
+                if (!depsData.error) {
+                    state.DEPS = depsData;
+                } else {
+                    state.DEPS = null;
+                }
+                callbacks.render();
+            })
+            .catch(() => {
+                state.DEPS = null;
+                callbacks.render();
+            });
+
         refreshFiberTree();
     } catch (err) {
         console.warn('[Overlay] Failed to refresh analysis:', err);

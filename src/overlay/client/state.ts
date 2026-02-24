@@ -12,8 +12,10 @@ export const state = {
     STATS: {} as any,
     ROUTE: '',
     ARCHITECTURE: null as any,
+    DEPS: null as any,
     FIBER_TREE: [] as any[],
     
+    viewMode: 'tree' as 'tree' | 'list',
     panelWidth: parseInt(localStorage.getItem('ro-panel-width') || '380', 10),
     isOpen: false,
     isLoading: true,
