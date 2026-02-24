@@ -1,6 +1,8 @@
 import fs from "fs/promises";
 import path from "path";
 import type { RouteEntryFiles } from "../types.js";
+import { resolveGenericReactEntry } from "./entry.js";
+import { fileExists } from "./fs-utils.js";
 
 interface RoutePath {
   dirs: string[];
@@ -22,14 +24,8 @@ export async function resolveRouteFiles(
   }
 
   if (!appDir) {
-    return {
-      layouts: [],
-      page: null,
-      loading: null,
-      error: null,
-      template: null,
-      notFound: null,
-    };
+    // Not a Next.js project — try to find a Vite/CRA-style entry point
+    return resolveGenericReactEntry(targetPath);
   }
 
   const validPaths = await findAllRoutePaths(appDir, segments);
@@ -145,11 +141,3 @@ async function findConventionFile(
   return null;
 }
 
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}

@@ -4,16 +4,35 @@ import { detectNextjsFileType, simplifyType, looksLikeComponent } from "./helper
 import { findHooks, findServerQueries } from "./hooks.js";
 import { extractChildDataFlow } from "./data-flow.js";
 
+/** Known HOC wrappers that take a component function as first argument */
+const COMPONENT_WRAPPERS = [
+  "forwardRef",
+  "memo",
+  "React.forwardRef",
+  "React.memo",
+];
+
 export function extractComponentFromFile(
   sourceFile: SourceFile,
   relativePath: string
 ): ComponentInfo | null {
+  const all = extractAllComponentsFromFile(sourceFile, relativePath);
+  return all.length > 0 ? all[0] : null;
+}
+
+export function extractAllComponentsFromFile(
+  sourceFile: SourceFile,
+  relativePath: string
+): ComponentInfo[] {
   const fileText = sourceFile.getFullText();
   const isClientComponent =
     fileText.includes('"use client"') || fileText.includes("'use client'");
   const isServerComponent =
     fileText.includes('"use server"') || fileText.includes("'use server'");
   const nextjsFileType = detectNextjsFileType(relativePath);
+
+  const results: ComponentInfo[] = [];
+  const seenNames = new Set<string>();
 
   const defaultExport = sourceFile.getDefaultExportSymbol();
   if (defaultExport) {
@@ -25,12 +44,17 @@ export function extractComponentFromFile(
         isServerComponent,
         nextjsFileType
       );
-      if (info) return info;
+      if (info && !seenNames.has(info.name)) {
+        seenNames.add(info.name);
+        results.push(info);
+        break;
+      }
     }
   }
 
   for (const [name, declarations] of sourceFile.getExportedDeclarations()) {
     if (name === "default") continue;
+    if (seenNames.has(name)) continue;
     for (const decl of declarations) {
       const info = extractFromNode(
         decl,
@@ -41,12 +65,32 @@ export function extractComponentFromFile(
       );
       if (info) {
         info.name = name;
-        return info;
+        if (!seenNames.has(name)) {
+          seenNames.add(name);
+          results.push(info);
+        }
+        break;
       }
     }
   }
 
-  return null;
+  return results;
+}
+
+function unwrapHocCall(node: Node): Node | null {
+  if (!Node.isCallExpression(node)) return null;
+  const exprText = node.getExpression().getText();
+  if (!COMPONENT_WRAPPERS.some(w => exprText === w || exprText.endsWith("." + w.split(".").pop()))) {
+    return null;
+  }
+  const args = node.getArguments();
+  if (args.length === 0) return null;
+  const firstArg = args[0];
+  if (Node.isArrowFunction(firstArg) || Node.isFunctionExpression(firstArg)) {
+    return firstArg;
+  }
+  // forwardRef can also wrap another call: React.forwardRef(React.memo((...) => ...))
+  return unwrapHocCall(firstArg);
 }
 
 function extractFromNode(
@@ -56,6 +100,27 @@ function extractFromNode(
   isServerComponent: boolean,
   nextjsFileType: NextjsFileType
 ): ComponentInfo | null {
+  // Handle `export default SomeName` — resolve the identifier to its declaration
+  if (Node.isExportAssignment(node)) {
+    const expr = node.getExpression();
+    if (expr && Node.isIdentifier(expr)) {
+      const sym = expr.getSymbol();
+      if (sym) {
+        for (const decl of sym.getDeclarations()) {
+          const info = extractFromNode(
+            decl,
+            filePath,
+            isClientComponent,
+            isServerComponent,
+            nextjsFileType
+          );
+          if (info) return info;
+        }
+      }
+    }
+    return null;
+  }
+
   if (
     Node.isFunctionDeclaration(node) ||
     Node.isArrowFunction(node) ||
@@ -82,20 +147,28 @@ function extractFromNode(
 
   if (Node.isVariableDeclaration(node)) {
     const init = node.getInitializer();
-    if (
-      init &&
-      (Node.isArrowFunction(init) || Node.isFunctionExpression(init))
-    ) {
-      const varName = node.getName();
-      if (!looksLikeComponent(init, varName)) return null;
+    if (!init) return null;
 
-      const childDataFlow = extractChildDataFlow(init);
+    // Direct arrow function or function expression
+    let funcNode: Node | null = null;
+    if (Node.isArrowFunction(init) || Node.isFunctionExpression(init)) {
+      funcNode = init;
+    } else {
+      // Try unwrapping HOC wrappers: React.forwardRef(...), React.memo(...)
+      funcNode = unwrapHocCall(init);
+    }
+
+    if (funcNode) {
+      const varName = node.getName();
+      if (!looksLikeComponent(funcNode, varName)) return null;
+
+      const childDataFlow = extractChildDataFlow(funcNode);
       return {
         name: varName,
         filePath,
-        props: extractProps(init),
-        hooks: findHooks(init),
-        serverQueries: isClientComponent ? [] : findServerQueries(init),
+        props: extractProps(funcNode),
+        hooks: findHooks(funcNode),
+        serverQueries: isClientComponent ? [] : findServerQueries(funcNode),
         childDataFlow: childDataFlow.length > 0 ? childDataFlow : undefined,
         isClientComponent,
         isServerComponent,
