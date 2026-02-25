@@ -12,6 +12,8 @@ export interface JsxUsage {
   directChildrenCounts: Map<string, number>;
   directChildrenLines: Map<string, number[]>;
   nestedInComponent: Map<string, string[]>;
+  nestedChildrenCounts: Map<string, Map<string, number>>;
+  nestedChildrenLines: Map<string, Map<string, number[]>>;
   identifiersInComponent: Map<string, string[]>;
   conditionalChildren: Map<string, ConditionalChild[]>;
 }
@@ -26,6 +28,8 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
   const directChildrenCounts = new Map<string, number>();
   const directChildrenLines = new Map<string, number[]>();
   const nestedInComponent = new Map<string, Set<string>>();
+  const nestedChildrenCounts = new Map<string, Map<string, number>>();
+  const nestedChildrenLines = new Map<string, Map<string, number[]>>();
   const identifiersInComponent = new Map<string, Set<string>>();
   const conditionalChildren = new Map<string, ConditionalChild[]>();
   const processedNodes = new WeakSet<Node>();
@@ -36,6 +40,17 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
         nestedInComponent.set(parentName, new Set());
       }
       nestedInComponent.get(parentName)!.add(childName);
+      if (!condition) {
+        if (!nestedChildrenCounts.has(parentName)) nestedChildrenCounts.set(parentName, new Map());
+        const parentCounts = nestedChildrenCounts.get(parentName)!;
+        parentCounts.set(childName, (parentCounts.get(childName) || 0) + 1);
+      }
+      if (lineNumber) {
+        if (!nestedChildrenLines.has(parentName)) nestedChildrenLines.set(parentName, new Map());
+        const parentLines = nestedChildrenLines.get(parentName)!;
+        if (!parentLines.has(childName)) parentLines.set(childName, []);
+        parentLines.get(childName)!.push(lineNumber);
+      }
     } else {
       directChildren.add(childName);
       if (!condition) {
@@ -199,6 +214,8 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
     directChildrenCounts,
     directChildrenLines,
     nestedInComponent: new Map(),
+    nestedChildrenCounts,
+    nestedChildrenLines,
     identifiersInComponent: new Map(),
     conditionalChildren,
   };

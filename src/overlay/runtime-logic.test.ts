@@ -304,6 +304,157 @@ describe("overlay runtime logic", () => {
     expect(dropsSpecimen.fiber).toBe(dropsCard1);
   });
 
+  it("unrendered branch does not steal fibers from rendered branch", () => {
+    const pageFiber: any = {};
+    const pageButtonFiber: any = { return: pageFiber };
+
+    const fiberTree = [
+      {
+        name: "Page",
+        fiber: pageFiber,
+        children: [
+          { name: "Button", fiber: pageButtonFiber, children: [] },
+        ],
+      },
+    ];
+
+    const staticTree = [
+      {
+        file: "UserMenu.tsx",
+        component: {
+          name: "UserMenu",
+          isClientComponent: true,
+          filePath: "UserMenu.tsx",
+        },
+        children: [
+          {
+            file: "Button.tsx",
+            component: {
+              name: "Button",
+              isClientComponent: true,
+              filePath: "Button.tsx",
+            },
+            children: [],
+          },
+        ],
+      },
+      {
+        file: "Page.tsx",
+        component: {
+          name: "Page",
+          isClientComponent: true,
+          filePath: "Page.tsx",
+        },
+        children: [
+          {
+            file: "Button.tsx",
+            component: {
+              name: "Button",
+              isClientComponent: true,
+              filePath: "Button.tsx",
+            },
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    const lookup = buildFiberLookupByName(fiberTree as any[]);
+    sortFiberLookupForMerge(lookup);
+    const merged = mergeStaticWithFiber(staticTree as any[], lookup);
+
+    const userMenuButton = merged[0].children[0];
+    const pageButton = merged[1].children[0];
+
+    expect(userMenuButton.fiber).toBeNull();
+    expect(pageButton.fiber).toBe(pageButtonFiber);
+
+    expect(findNodeIdForFiber(merged, pageButtonFiber)).toBe("1-0");
+  });
+
+  it("unrendered parent with no fiber does not let children grab unrelated fibers", () => {
+    const layoutFiber: any = {};
+    const headerFiber: any = { return: layoutFiber };
+    const headerBadgeFiber: any = { return: headerFiber };
+
+    const fiberTree = [
+      {
+        name: "Layout",
+        fiber: layoutFiber,
+        children: [
+          {
+            name: "Header",
+            fiber: headerFiber,
+            children: [
+              { name: "Badge", fiber: headerBadgeFiber, children: [] },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const staticTree = [
+      {
+        file: "Layout.tsx",
+        component: {
+          name: "Layout",
+          isClientComponent: true,
+          filePath: "Layout.tsx",
+        },
+        children: [
+          {
+            file: "Sidebar.tsx",
+            component: {
+              name: "Sidebar",
+              isClientComponent: true,
+              filePath: "Sidebar.tsx",
+            },
+            children: [
+              {
+                file: "Badge.tsx",
+                component: {
+                  name: "Badge",
+                  isClientComponent: true,
+                  filePath: "Badge.tsx",
+                },
+                children: [],
+              },
+            ],
+          },
+          {
+            file: "Header.tsx",
+            component: {
+              name: "Header",
+              isClientComponent: true,
+              filePath: "Header.tsx",
+            },
+            children: [
+              {
+                file: "Badge.tsx",
+                component: {
+                  name: "Badge",
+                  isClientComponent: true,
+                  filePath: "Badge.tsx",
+                },
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const lookup = buildFiberLookupByName(fiberTree as any[]);
+    sortFiberLookupForMerge(lookup);
+    const merged = mergeStaticWithFiber(staticTree as any[], lookup);
+
+    const sidebarBadge = merged[0].children[0].children[0];
+    const headerBadge = merged[0].children[1].children[0];
+
+    expect(sidebarBadge.fiber).toBeNull();
+    expect(headerBadge.fiber).toBe(headerBadgeFiber);
+  });
+
   it("getNodeByPath retrieves the correct node", () => {
     const tree = [
       {

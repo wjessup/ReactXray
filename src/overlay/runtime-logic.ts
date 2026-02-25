@@ -52,6 +52,7 @@ export function mergeStaticWithFiber(
   usedFibers = new Set<any>(),
   staticNamesInTree: Set<string> | null = null,
   parentFiber: any = null,
+  parentUnrendered = false,
 ): any[] {
   if (!staticNamesInTree) {
     staticNamesInTree = collectStaticNames(staticNodes);
@@ -70,6 +71,7 @@ export function mergeStaticWithFiber(
           usedFibers,
           staticNamesInTree,
           parentFiber,
+          parentUnrendered,
         ),
         isSlot: true,
       };
@@ -77,7 +79,7 @@ export function mergeStaticWithFiber(
 
     let fiberMatch = null;
 
-    if (compName && fiberLookup.has(compName)) {
+    if (!parentUnrendered && compName && fiberLookup.has(compName)) {
       const candidates = fiberLookup.get(compName)!;
 
       if (parentFiber) {
@@ -103,6 +105,7 @@ export function mergeStaticWithFiber(
     }
 
     const nextParentFiber = fiberMatch?.fiber || parentFiber;
+    const thisUnrendered = parentUnrendered || (isClientComponent && !fiberMatch);
 
     if (fiberMatch && isClientComponent) {
       return {
@@ -118,6 +121,7 @@ export function mergeStaticWithFiber(
           usedFibers,
           staticNamesInTree,
           nextParentFiber,
+          false,
         ),
         isBridge: true,
         hasFiber: true,
@@ -139,6 +143,7 @@ export function mergeStaticWithFiber(
         usedFibers,
         staticNamesInTree,
         nextParentFiber,
+        thisUnrendered,
       ),
       isServerOnly: !fiberMatch && !isClientComponent,
       hasFiber: !!fiberMatch,

@@ -704,49 +704,61 @@ function buildComponentTree(
     return jsxUsage.directChildren;
   }
 
-  function getAllProjectComponentsFromFile(file: string): string[] {
-    const jsxUsage = jsxUsageMap.get(file);
-    if (!jsxUsage) return [];
+  interface FileComponentUsage {
+    names: string[];
+    effectiveCounts: Map<string, number>;
+    effectiveLines: Map<string, number[]>;
+  }
 
+  function getAllProjectComponentsFromFile(file: string): FileComponentUsage {
+    const jsxUsage = jsxUsageMap.get(file);
+    if (!jsxUsage) return { names: [], effectiveCounts: new Map(), effectiveLines: new Map() };
+
+    const effectiveCounts = new Map<string, number>();
+    const effectiveLines = new Map<string, number[]>();
     const allComponents = new Set<string>();
 
     for (const name of jsxUsage.directChildren) {
       if (nameToFileMap.has(name)) {
         allComponents.add(name);
+        effectiveCounts.set(name, jsxUsage.directChildrenCounts.get(name) || 1);
+        const lines = jsxUsage.directChildrenLines.get(name);
+        if (lines) effectiveLines.set(name, [...lines]);
       }
     }
 
-    // For project components nested under non-project wrappers (e.g. <Route element={<Index />}>),
-    // walk through the nesting hierarchy and collect them.
-    // Only walk non-project parents reachable from directChildren through non-project chains.
-    // Do NOT walk non-project parents that are nested under a project parent
-    // (those are handled by the passedAsChildren expansion).
-    const collected = new Set<string>(allComponents);
+    const visited = new Set<string>();
 
     function collectFromNonProjectParent(parentName: string) {
+      if (visited.has(parentName)) return;
+      visited.add(parentName);
       const nested = jsxUsage!.nestedInComponent.get(parentName);
       if (!nested) return;
+      const parentCounts = jsxUsage!.nestedChildrenCounts.get(parentName);
+      const parentLines = jsxUsage!.nestedChildrenLines.get(parentName);
       for (const childName of nested) {
         if (nameToFileMap.has(childName)) {
-          if (!collected.has(childName)) {
-            allComponents.add(childName);
-            collected.add(childName);
+          allComponents.add(childName);
+          const nestedCount = parentCounts?.get(childName) || 1;
+          effectiveCounts.set(childName, (effectiveCounts.get(childName) || 0) + nestedCount);
+          const nestedLines = parentLines?.get(childName);
+          if (nestedLines) {
+            if (!effectiveLines.has(childName)) effectiveLines.set(childName, []);
+            effectiveLines.get(childName)!.push(...nestedLines);
           }
         } else {
-          // Recurse through non-project wrapper components
           collectFromNonProjectParent(childName);
         }
       }
     }
 
-    // Only start from non-project direct children (top-level wrappers)
-    for (const directChild of jsxUsage.directChildren) {
-      if (!nameToFileMap.has(directChild)) {
-        collectFromNonProjectParent(directChild);
+    for (const [parentName] of jsxUsage.nestedInComponent) {
+      if (!nameToFileMap.has(parentName)) {
+        collectFromNonProjectParent(parentName);
       }
     }
 
-    return Array.from(allComponents);
+    return { names: Array.from(allComponents), effectiveCounts, effectiveLines };
   }
 
   function getInferredChildrenForComponent(
@@ -792,24 +804,6 @@ function buildComponentTree(
     return next;
   }
 
-  // Expand non-project wrappers (e.g. Suspense, Fragment) to their nested project children
-  function expandNonProjectWrappers(
-    names: string[],
-    jsxUsage: EnhancedJsxUsage | null,
-  ): string[] {
-    const result: string[] = [];
-    for (const name of names) {
-      if (nameToFileMap.has(name)) {
-        result.push(name);
-      } else if (jsxUsage) {
-        // Non-project wrapper: hoist its nested children
-        const nested = jsxUsage.nestedInComponent.get(name) || [];
-        result.push(...expandNonProjectWrappers(nested, jsxUsage));
-      }
-    }
-    return result;
-  }
-
   function buildFromFile(
     file: string,
     callerJsxUsage: EnhancedJsxUsage | null,
@@ -829,12 +823,10 @@ function buildComponentTree(
     const children: ComponentTreeNode[] = [];
     const fileJsxUsage = jsxUsageMap.get(file);
 
-    const rawPassedAsChildren =
+    const passedAsChildren =
       fromComponentName && callerJsxUsage
         ? callerJsxUsage.nestedInComponent.get(fromComponentName) || []
         : [];
-
-    const passedAsChildren = expandNonProjectWrappers(rawPassedAsChildren, callerJsxUsage);
 
     for (const childName of passedAsChildren) {
       const childFile = nameToFileMap.get(childName);
@@ -871,19 +863,19 @@ function buildComponentTree(
       }
     }
 
-    const allProjectComponents = getAllProjectComponentsFromFile(file);
+    const { names: allProjectComponents, effectiveCounts, effectiveLines } = getAllProjectComponentsFromFile(file);
     for (const childName of allProjectComponents) {
       const existingCount = children.filter(
         (c) => c.component?.name === childName,
       ).length;
-      const targetCount = fileJsxUsage?.directChildrenCounts?.get(childName) || 1;
+      const targetCount = effectiveCounts.get(childName) || 1;
       const remaining = Math.max(0, targetCount - existingCount);
       if (remaining === 0) continue;
 
       const childFile = nameToFileMap.get(childName);
       if (!childFile || isCircular(childName, childFile, currentPath)) continue;
 
-      const usageLines = fileJsxUsage?.directChildrenLines?.get(childName) || [];
+      const usageLines = effectiveLines.get(childName) || [];
       for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
@@ -914,7 +906,7 @@ function buildComponentTree(
   function buildWithPassedChildren(
     file: string,
     componentName: string,
-    rawPassedChildren: string[],
+    passedChildren: string[],
     callerJsxUsage: EnhancedJsxUsage | null,
     ancestorPath: Set<string>,
   ): ComponentTreeNode {
@@ -930,9 +922,6 @@ function buildComponentTree(
 
     const children: ComponentTreeNode[] = [];
     const fileJsxUsage = jsxUsageMap.get(file);
-
-    // Expand non-project wrappers to their nested project children
-    const passedChildren = expandNonProjectWrappers(rawPassedChildren, callerJsxUsage);
 
     for (const childName of passedChildren) {
       const childFile = nameToFileMap.get(childName);
@@ -969,19 +958,19 @@ function buildComponentTree(
       }
     }
 
-    const allProjectComponents = getAllProjectComponentsFromFile(file);
-    for (const childName of allProjectComponents) {
+    const { names: allProjectComponents2, effectiveCounts: ec2, effectiveLines: el2 } = getAllProjectComponentsFromFile(file);
+    for (const childName of allProjectComponents2) {
       const existingCount = children.filter(
         (c) => c.component?.name === childName,
       ).length;
-      const targetCount = fileJsxUsage?.directChildrenCounts?.get(childName) || 1;
+      const targetCount = ec2.get(childName) || 1;
       const remaining = Math.max(0, targetCount - existingCount);
       if (remaining === 0) continue;
 
       const childFile = nameToFileMap.get(childName);
       if (!childFile || isCircular(childName, childFile, currentPath)) continue;
 
-      const usageLines = fileJsxUsage?.directChildrenLines?.get(childName) || [];
+      const usageLines = el2.get(childName) || [];
       for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
