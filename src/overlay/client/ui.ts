@@ -8,6 +8,7 @@ import {
     getAncestryNames,
     getDomFromFiber,
     getFiberName,
+    getParentNode,
     hasAnyFiberDescendant,
     h,
 } from './utils';
@@ -305,23 +306,39 @@ function attachNodeEvents() {
 
             if (target.classList.contains('ai-add-btn')) {
                 const nodeName = (node as HTMLElement).dataset.name!;
-                const nodeFile = (node as HTMLElement).dataset.file || 'unknown';
                 const nodeId = (node as HTMLElement).dataset.id!;
                 const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
-                const line = treeNode?.source?.lineNumber || 1;
+                const definedFile = treeNode?.component?.filePath || (node as HTMLElement).dataset.file || 'unknown';
+                const parentTreeNode = getParentNode(state.DISPLAY_TREE, nodeId);
+                const parentFile = parentTreeNode?.component?.filePath || parentTreeNode?.file || '';
+                const usageLine = treeNode?.source?.lineNumber || 0;
+                const hasUsageSite = parentFile && parentFile !== definedFile;
                 const ancestry = getAncestryNames(state.DISPLAY_TREE, nodeId);
-                addComponentToAiContext(nodeName, nodeFile, line, ancestry);
+                addComponentToAiContext(
+                    nodeName,
+                    definedFile,
+                    1,
+                    ancestry,
+                    hasUsageSite ? parentFile : undefined,
+                    hasUsageSite ? usageLine : undefined,
+                );
                 if (!state.aiOpen) { state.aiOpen = true; renderAiSection(); }
                 return;
             }
 
             if (target.classList.contains('file-btn')) {
-                const nodeId = (node as HTMLElement).dataset.id!;
-                const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
-                const filePath = treeNode?.source?.fileName || (node as HTMLElement).dataset.file;
-                const lineNumber = treeNode?.source?.lineNumber || 1;
-                if (filePath && filePath !== 'unknown') {
-                    window.open('cursor://file/' + filePath + ':' + lineNumber);
+                const defFile = target.getAttribute('data-def-file');
+                if (defFile) {
+                    window.open('cursor://file/' + defFile + ':1');
+                }
+                return;
+            }
+
+            if (target.classList.contains('usage-btn')) {
+                const usageFile = target.getAttribute('data-usage-file');
+                const usageLine = target.getAttribute('data-usage-line') || '1';
+                if (usageFile) {
+                    window.open('cursor://file/' + usageFile + ':' + usageLine);
                 }
                 return;
             }

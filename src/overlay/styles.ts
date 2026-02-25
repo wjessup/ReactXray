@@ -241,14 +241,14 @@ export const OVERLAY_CSS = `
 
   .ai-add-btn:hover { opacity: 1; }
 
-  .file-btn {
+  .file-btn, .usage-btn {
     cursor: pointer;
     opacity: 0.3;
     font-size: 10px;
     margin-left: 2px;
   }
 
-  .file-btn:hover { opacity: 1; }
+  .file-btn:hover, .usage-btn:hover { opacity: 1; }
 
   .ai-result-body { padding: 8px 12px 10px; }
 

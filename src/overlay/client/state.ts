@@ -36,11 +36,10 @@ export const state = {
 
     aiOpen: false,
     aiMessage: '',
-    aiContext: [] as Array<{ name: string; file: string; line: number; ancestry: string[] }>,
+    aiContext: [] as Array<{ name: string; file: string; line: number; ancestry: string[]; usageFile?: string; usageLine?: number }>,
     aiSending: false,
     aiResult: null as {
         prompt: string;
-        files: Array<{ path: string; line: number; snippet: string }>;
         cursorLinks: string[];
     } | null,
 };

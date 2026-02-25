@@ -270,48 +270,62 @@ function startProxyServer(
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
             const message: string = body.message || "";
-            const context: Array<{ name: string; file: string; line: number; ancestry?: string[] }> = body.context || [];
+            const context: Array<{ name: string; file: string; line: number; ancestry?: string[]; usageFile?: string; usageLine?: number }> = body.context || [];
 
             const SNIPPET_RADIUS = 5;
-            const files: Array<{ path: string; line: number; snippet: string; ancestry: string[] }> = [];
             const cursorLinks: string[] = [];
 
-            for (const ctx of context) {
-              const filePath = ctx.file.startsWith("/")
-                ? ctx.file
+            function resolvePath(file: string): string {
+              return file.startsWith("/") || file.startsWith("\\") || /^[A-Z]:\\/i.test(file)
+                ? file
                 : projectPath
-                  ? path.join(projectPath, ctx.file)
-                  : ctx.file;
+                  ? path.join(projectPath, file)
+                  : file;
+            }
 
-              const cursorLink = "cursor://file/" + filePath + ":" + ctx.line;
-              cursorLinks.push(cursorLink);
-
+            async function readSnippet(filePath: string, line: number): Promise<string> {
               try {
                 const content = await fs.readFile(filePath, "utf-8");
                 const lines = content.split("\n");
-                const start = Math.max(0, ctx.line - SNIPPET_RADIUS - 1);
-                const end = Math.min(lines.length, ctx.line + SNIPPET_RADIUS);
-                const snippet = lines.slice(start, end).join("\n");
-                files.push({ path: filePath, line: ctx.line, snippet, ancestry: ctx.ancestry || [] });
+                const start = Math.max(0, line - SNIPPET_RADIUS - 1);
+                const end = Math.min(lines.length, line + SNIPPET_RADIUS);
+                return lines.slice(start, end).join("\n");
               } catch {
-                files.push({ path: filePath, line: ctx.line, snippet: "// Could not read file", ancestry: ctx.ancestry || [] });
+                return "// Could not read file";
               }
             }
 
             const ext = (p: string) => p.split(".").pop() || "tsx";
             let prompt = "## Task\n" + message + "\n\n## Components\n";
-            for (let i = 0; i < files.length; i++) {
-              const f = files[i];
-              const shortPath = projectPath ? path.relative(projectPath, f.path) : f.path;
-              const ancestryLabel = f.ancestry.length > 0 ? f.ancestry.join(" > ") + " > " + context[i].name : context[i].name;
-              prompt += "\n### " + ancestryLabel + " (" + shortPath + ":" + f.line + ")\n";
-              prompt += cursorLinks[i] + "\n";
-              prompt += "```" + ext(f.path) + "\n" + f.snippet + "\n```\n";
+
+            for (const ctx of context) {
+              const defPath = resolvePath(ctx.file);
+              const defShort = projectPath ? path.relative(projectPath, defPath) : defPath;
+              const ancestryLabel = (ctx.ancestry || []).length > 0 ? (ctx.ancestry || []).join(" > ") + " > " + ctx.name : ctx.name;
+              const defLink = "cursor://file/" + defPath + ":" + ctx.line;
+              cursorLinks.push(defLink);
+
+              prompt += "\n### " + ancestryLabel + " (" + defShort + ")\n";
+              prompt += defLink + "\n";
+
+              if (ctx.usageFile && ctx.usageLine) {
+                const usagePath = resolvePath(ctx.usageFile);
+                const usageShort = projectPath ? path.relative(projectPath, usagePath) : usagePath;
+                const usageSnippet = await readSnippet(usagePath, ctx.usageLine);
+                const usageLink = "cursor://file/" + usagePath + ":" + ctx.usageLine;
+                prompt += "\n**Used at** " + usageShort + ":" + ctx.usageLine + "\n";
+                prompt += usageLink + "\n";
+                prompt += "```" + ext(usagePath) + "\n" + usageSnippet + "\n```\n";
+              }
+
+              const defSnippet = await readSnippet(defPath, ctx.line);
+              prompt += "\n**Defined at** " + defShort + ":" + ctx.line + "\n";
+              prompt += "```" + ext(defPath) + "\n" + defSnippet + "\n```\n";
             }
 
             res.setHeader("Content-Type", "application/json");
             res.setHeader("Access-Control-Allow-Origin", "*");
-            res.end(JSON.stringify({ prompt, files, cursorLinks }));
+            res.end(JSON.stringify({ prompt, cursorLinks }));
           } catch (err) {
             res.statusCode = 500;
             res.setHeader("Access-Control-Allow-Origin", "*");

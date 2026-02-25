@@ -4,7 +4,8 @@ export const OVERLAY_ID = 'react-xray-overlay-root';
 
 export function getDomFromFiber(fiber: any): any {
     if (!fiber) return null;
-    if (fiber.stateNode instanceof Element) return fiber.stateNode;
+    const activeFiber = fiber.alternate && fiber.alternate.child && !fiber.child ? fiber.alternate : fiber;
+    if (activeFiber.stateNode instanceof Element) return activeFiber.stateNode;
 
     const elements: Element[] = [];
     function collectElements(f: any, depth = 0) {
@@ -19,7 +20,7 @@ export function getDomFromFiber(fiber: any): any {
             child = child.sibling;
         }
     }
-    collectElements(fiber);
+    collectElements(activeFiber);
 
     if (elements.length === 0) return null;
     if (elements.length === 1) return elements[0];
@@ -322,6 +323,19 @@ export function getParentName(displayTree: any[], nodeId: string): string | null
         const node = current[parts[i]];
         if (!node) return null;
         if (i === parts.length - 2) return node.component?.name || null;
+        current = node.children || [];
+    }
+    return null;
+}
+
+export function getParentNode(displayTree: any[], nodeId: string): any | null {
+    const parts = nodeId.split('-').map(Number);
+    if (parts.length < 2) return null;
+    let current = displayTree;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const node = current[parts[i]];
+        if (!node) return null;
+        if (i === parts.length - 2) return node;
         current = node.children || [];
     }
     return null;

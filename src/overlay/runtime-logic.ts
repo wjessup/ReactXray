@@ -154,7 +154,7 @@ export function findNodeIdByFiber(
   for (let i = 0; i < nodes.length; i++) {
     const nodeId = prefix ? prefix + "-" + i : String(i);
     const node = nodes[i];
-    if (node?.fiber === fiber) return nodeId;
+    if (node?.fiber && (node.fiber === fiber || node.fiber.alternate === fiber || node.fiber === fiber.alternate)) return nodeId;
     if (node?.children?.length) {
       const found = findNodeIdByFiber(node.children, fiber, nodeId);
       if (found) return found;
