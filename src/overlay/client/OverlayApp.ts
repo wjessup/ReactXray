@@ -1,10 +1,11 @@
 import { OVERLAY_CSS, HIGHLIGHT_CSS } from '../styles.js';
 import { state, callbacks } from './state';
-import { renderPanel, selectTreeNodeByStack } from './ui';
+import { renderPanel, selectTreeNodeById, selectTreeNodeByStack } from './ui';
 import { setupRenderTracking } from './render-tracking';
 import { showHoverHighlight, hideHoverHighlight, showSelectedHighlight, hideSelectedHighlight } from './highlight';
 import { isOverlayElement, getFiberFromElement, getFiberName, getDomFromFiber, getComponentStack } from './utils';
 import { refreshAnalysis, checkForRouteChange, buildStaticComponentMap, loadComponentAllowlist, refreshFiberTree, toggle } from './logic';
+import { findNodeIdForFiber } from '../runtime-logic.js';
 
 // Declarations
 declare global {
@@ -63,13 +64,23 @@ function enableInspectMode() {
             let chosenName: string | null = null;
             let selectedNodeId: string | null = null;
 
-            for (let i = 0; i < stack.length; i++) {
-                const target = stack[i];
-                if (!target || SKIP.has(target)) continue;
-                selectedNodeId = selectTreeNodeByStack(stack.slice(i));
+            if (fiber) {
+                selectedNodeId = findNodeIdForFiber(state.DISPLAY_TREE, fiber);
                 if (selectedNodeId) {
-                    chosenName = target;
-                    break;
+                    selectTreeNodeById(selectedNodeId);
+                    chosenName = name;
+                }
+            }
+
+            if (!selectedNodeId) {
+                for (let i = 0; i < stack.length; i++) {
+                    const target = stack[i];
+                    if (!target || SKIP.has(target)) continue;
+                    selectedNodeId = selectTreeNodeByStack(stack.slice(i));
+                    if (selectedNodeId) {
+                        chosenName = target;
+                        break;
+                    }
                 }
             }
 
