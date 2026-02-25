@@ -32,6 +32,7 @@ export const state = {
     
     selectedFiber: null as any,
     selectedElement: null as any,
+    elementToFiberMap: new WeakMap<Element, any>(),
     renderCounts: new Map<string, number>(),
     totalRenders: 0,
 

@@ -10,6 +10,7 @@ import {
     getFiberName,
     getParentNode,
     hasAnyFiberDescendant,
+    invalidateDisplayNamesCache,
     h,
 } from './utils';
 import { hideHoverHighlight, hideSelectedHighlight, showHoverHighlight, showSelectedHighlight } from './highlight';
@@ -28,6 +29,7 @@ export function renderPanel() {
     }
 
     state.DISPLAY_TREE = filterIgnoredNodes(state.TREE);
+    invalidateDisplayNamesCache();
     const filterLabel = getFilterEnabled() ? 'FILTERED' : 'ALL';
     const ignoredCount = state.ignoredPaths.filter((p: string) => p.trim()).length;
 
@@ -142,6 +144,7 @@ function attachPanelEvents() {
         const tree = state.shadow?.querySelector('.tree');
         if (tree) {
             state.DISPLAY_TREE = filterIgnoredNodes(state.TREE);
+            invalidateDisplayNamesCache();
             renderTreeContainer(tree as HTMLElement);
             attachNodeEvents();
         }
