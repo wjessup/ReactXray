@@ -136,20 +136,6 @@ function annotateFiberPositions(nodes: any[]) {
     }
 }
 
-function detectMinified(nodes: any[]): boolean {
-    const names: string[] = [];
-    function collect(list: any[]) {
-        for (const n of list) {
-            if (n.name) names.push(n.name);
-            if (n.children) collect(n.children);
-        }
-    }
-    collect(nodes);
-    if (names.length < 3) return false;
-    const singleChar = names.filter(n => n.length <= 2).length;
-    return singleChar / names.length > 0.5;
-}
-
 function countServerOnlyNodes(nodes: any[]): number {
     return nodes.reduce((acc, n) => {
         const isSelf = n.isServerOnly ? 1 : 0;
@@ -192,9 +178,11 @@ function saveCalculatedTree() {
 
 export function refreshFiberTree() {
     resetFiberKeyCache();
-    invalidateDisplayNamesCache();
     state.FIBER_TREE = captureFullFiberTree();
-    state.isMinified = detectMinified(state.FIBER_TREE);
+
+    if (state.FIBER_TREE.length === 0) return;
+
+    invalidateDisplayNamesCache();
     const filtered = filterEnabled ? filterFiberTree(state.FIBER_TREE) : state.FIBER_TREE;
     annotateFiberPositions(filtered);
     const fiberLookup = buildFiberLookupByName(filtered);
@@ -205,43 +193,30 @@ export function refreshFiberTree() {
     const serverCount = countServerOnlyNodes(state.TREE);
     const clientCount = countClientNodes(state.TREE);
 
-    function countNodes(nodes: any[]): { total: number; matched: number } {
-        let total = 0;
-        let matched = 0;
+    let totalComps = 0;
+    let matchedComps = 0;
+    const countNodes = (nodes: any[]) => {
         for (const n of nodes) {
-            if (n.component) {
-                total++;
-                if (n.hasFiber) matched++;
-            }
-            if (n.children) {
-                const child = countNodes(n.children);
-                total += child.total;
-                matched += child.matched;
-            }
+            if (n.component) { totalComps++; if (n.hasFiber) matchedComps++; }
+            if (n.children) countNodes(n.children);
         }
-        return { total, matched };
-    }
-
-    const counts = countNodes(state.TREE);
-    const rawFiberCount = state.FIBER_TREE.reduce(
-        function countRaw(acc: number, n: any): number { return acc + 1 + (n.children || []).reduce(countRaw, 0); },
-        0
-    );
+    };
+    countNodes(state.TREE);
 
     console.log(
-        `[Overlay] Components: ${counts.matched} matched / ${counts.total} static` +
-        ` | Fibers: ${rawFiberCount} raw → ${filtered.length > 0 ? fiberLookup.size : 0} unique` +
+        `[Overlay] Components: ${matchedComps} matched / ${totalComps} static` +
+        ` | Fibers: ${fiberLookup.size} unique` +
         ` | Server: ${serverCount}, Client: ${clientCount}`
     );
 
     state.STATS = {
-        totalComponents: counts.total,
+        totalComponents: totalComps,
         serverComponents: serverCount,
         clientComponents: clientCount,
         fiberNodes: fiberLookup.size,
-        matchedComponents: counts.matched,
+        matchedComponents: matchedComps,
     };
-    
+
     if (!state.isLoading) {
         callbacks.render();
     }
@@ -295,7 +270,9 @@ export async function refreshAnalysis() {
                 callbacks.render();
             });
 
-        refreshFiberTree();
+        if (state.FIBER_TREE.length > 0) {
+            refreshFiberTree();
+        }
     } catch (err) {
         console.warn('[Overlay] Failed to refresh analysis:', err);
     }

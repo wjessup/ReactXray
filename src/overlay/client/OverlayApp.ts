@@ -230,14 +230,8 @@ export function mount(initialData?: any) {
         renderPanel();
         return;
       }
-      if (attempts < 40) {
-        const delay = attempts < 10 ? 250 : attempts < 20 ? 500 : 1000;
-        setTimeout(() => waitForFiberTree(attempts + 1), delay);
-      } else {
-        console.warn('[Overlay] Gave up finding fiber tree after 40 attempts');
-        ensureDomMounted();
-        renderPanel();
-      }
+      const delay = Math.min(attempts < 5 ? 200 : attempts < 15 ? 500 : 2000, 5000);
+      setTimeout(() => waitForFiberTree(attempts + 1), delay);
     }
 
     function hookIntoReactDevTools() {
@@ -247,12 +241,8 @@ export function mount(initialData?: any) {
       if (typeof origInject === 'function') {
         hook.inject = function(...args: any[]) {
           const result = origInject.apply(this, args);
-          console.log('[Overlay] React renderer injected into DevTools hook');
           setTimeout(() => {
-            if (!fiberTreeFound) {
-              console.log('[Overlay] Retrying fiber tree after renderer inject...');
-              waitForFiberTree(0);
-            }
+            if (!fiberTreeFound) waitForFiberTree(0);
           }, 500);
           return result;
         };
@@ -261,7 +251,6 @@ export function mount(initialData?: any) {
       if (typeof origOnCommit === 'function') {
         hook.onCommitFiberRoot = function(rendererID: any, root: any, ...rest: any[]) {
           if (!fiberTreeFound && root?.current?.child) {
-            console.log('[Overlay] Fiber commit with children detected, retrying...');
             setTimeout(() => {
               if (!fiberTreeFound) waitForFiberTree(0);
             }, 100);
