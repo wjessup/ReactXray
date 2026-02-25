@@ -12,6 +12,7 @@ export const state = {
     STATS: {} as any,
     ROUTE: '',
     ARCHITECTURE: null as any,
+    PROJECT_PATH: '',
     DEPS: null as any,
     FIBER_TREE: [] as any[],
     

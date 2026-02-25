@@ -223,6 +223,10 @@ export async function refreshAnalysis() {
             state.ARCHITECTURE = data.architectureAnalysis;
         }
 
+        if (data.projectPath) {
+            state.PROJECT_PATH = data.projectPath;
+        }
+
         state.ROUTE = window.location.pathname;
         lastAnalyzedRoute = state.ROUTE;
 

@@ -2,6 +2,15 @@ import { state } from './state';
 
 export const OVERLAY_ID = 'react-xray-overlay-root';
 
+export function resolveFilePath(relativePath: string): string {
+    if (!relativePath) return relativePath;
+    if (/^[A-Z]:\\/i.test(relativePath) || relativePath.startsWith('/')) return relativePath;
+    if (!state.PROJECT_PATH) return relativePath;
+    const sep = state.PROJECT_PATH.includes('\\') ? '\\' : '/';
+    const base = state.PROJECT_PATH.endsWith(sep) ? state.PROJECT_PATH : state.PROJECT_PATH + sep;
+    return base + relativePath.replace(/\//g, sep);
+}
+
 export function getDomFromFiber(fiber: any): any {
     if (!fiber) return null;
     const activeFiber = fiber.alternate && fiber.alternate.child && !fiber.child ? fiber.alternate : fiber;

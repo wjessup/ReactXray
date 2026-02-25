@@ -883,6 +883,7 @@ function buildComponentTree(
       const childFile = nameToFileMap.get(childName);
       if (!childFile || isCircular(childName, childFile, currentPath)) continue;
 
+      const usageLines = fileJsxUsage?.directChildrenLines?.get(childName) || [];
       for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
@@ -894,6 +895,10 @@ function buildComponentTree(
         const condition = getRenderCondition(file, null, childName);
         if (condition) {
           childNode.renderCondition = condition;
+        }
+
+        if (usageLines[existingCount + n]) {
+          childNode.usageLine = usageLines[existingCount + n];
         }
 
         children.push(childNode);
@@ -976,6 +981,7 @@ function buildComponentTree(
       const childFile = nameToFileMap.get(childName);
       if (!childFile || isCircular(childName, childFile, currentPath)) continue;
 
+      const usageLines = fileJsxUsage?.directChildrenLines?.get(childName) || [];
       for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
@@ -987,6 +993,10 @@ function buildComponentTree(
         const condition = getRenderCondition(file, null, childName);
         if (condition) {
           childNode.renderCondition = condition;
+        }
+
+        if (usageLines[existingCount + n]) {
+          childNode.usageLine = usageLines[existingCount + n];
         }
 
         children.push(childNode);

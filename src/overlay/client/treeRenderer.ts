@@ -1,6 +1,6 @@
-import { state } from './state';
-import { getStaticComponent } from './logic';
-import { escapeHtml, hasAnyFiberDescendant, h, getParentNode } from './utils';
+import { state } from './state.js';
+import { getStaticComponent } from './logic.js';
+import { escapeHtml, hasAnyFiberDescendant, h, getParentNode, resolveFilePath } from './utils.js';
 
 export function nodeMatchesSearch(node: any, term: string): boolean {
     if (!term) return true;
@@ -63,7 +63,7 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
         const definedFile = comp?.filePath || '';
         const parentNode = getParentNode(state.DISPLAY_TREE, nodeId);
         const parentFile = parentNode?.component?.filePath || parentNode?.file || '';
-        const usageLine = node.source?.lineNumber || 0;
+        const usageLine = node.usageLine || node.source?.lineNumber || 0;
         const hasUsageSite = parentFile && parentFile !== definedFile;
         const hasDefinition = definedFile && definedFile !== 'unknown';
 
@@ -148,8 +148,8 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             ${dataFlowHtml}
             <span class="info-btn" title="View details">ℹ</span>
             <span class="ai-add-btn" title="Add to AI context">+✨</span>
-            ${hasUsageSite ? '<span class="usage-btn" title="Used at: ' + escapeHtml(parentFile.split('/').pop() || parentFile) + (usageLine ? ':' + usageLine : '') + '" data-usage-file="' + escapeHtml(parentFile) + '" data-usage-line="' + usageLine + '">📍</span>' : ''}
-            ${hasDefinition ? '<span class="file-btn" title="Open: ' + escapeHtml(definedFile.split('/').pop() || definedFile) + '" data-def-file="' + escapeHtml(definedFile) + '">📂</span>' : ''}
+            ${hasUsageSite ? '<span class="usage-btn" title="Used at: ' + escapeHtml((parentFile.split('/').pop() || parentFile).split('\\').pop() || parentFile) + (usageLine ? ':' + usageLine : '') + '" data-usage-file="' + escapeHtml(resolveFilePath(parentFile)) + '" data-usage-line="' + usageLine + '">📍</span>' : ''}
+            ${hasDefinition ? '<span class="file-btn" title="Open: ' + escapeHtml((definedFile.split('/').pop() || definedFile).split('\\').pop() || definedFile) + '" data-def-file="' + escapeHtml(resolveFilePath(definedFile)) + '">📂</span>' : ''}
             ${renderCountHtml}
             <span class="file ${hasSource ? 'has-source' : ''}" title="${escapeHtml(rawFile)}">${escapeHtml(fileDisplay)}</span>
           </div>

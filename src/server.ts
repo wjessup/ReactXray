@@ -166,6 +166,7 @@ function startProxyServer(
               allComponents: result.allComponents,
               stats: result.stats,
               architectureAnalysis: result.architectureAnalysis,
+              projectPath: projectPath || '',
             })
           );
           console.log(
@@ -243,8 +244,9 @@ function startProxyServer(
           return;
         }
         
-        const normalizedPath = filePath.startsWith("/") ? filePath : path.join(projectPath, filePath);
-        if (!normalizedPath.startsWith(projectPath)) {
+        const isAbsolute = filePath.startsWith("/") || /^[A-Z]:[/\\]/i.test(filePath);
+        const normalizedPath = path.resolve(isAbsolute ? filePath : path.join(projectPath, filePath));
+        if (!normalizedPath.toLowerCase().startsWith(path.resolve(projectPath).toLowerCase())) {
           res.statusCode = 403;
           res.end(JSON.stringify({ error: "Access denied" }));
           return;
@@ -308,14 +310,32 @@ function startProxyServer(
               prompt += "\n### " + ancestryLabel + " (" + defShort + ")\n";
               prompt += defLink + "\n";
 
-              if (ctx.usageFile && ctx.usageLine) {
+              if (ctx.usageFile) {
                 const usagePath = resolvePath(ctx.usageFile);
-                const usageShort = projectPath ? path.relative(projectPath, usagePath) : usagePath;
-                const usageSnippet = await readSnippet(usagePath, ctx.usageLine);
-                const usageLink = "cursor://file/" + usagePath + ":" + ctx.usageLine;
-                prompt += "\n**Used at** " + usageShort + ":" + ctx.usageLine + "\n";
-                prompt += usageLink + "\n";
-                prompt += "```" + ext(usagePath) + "\n" + usageSnippet + "\n```\n";
+                let usageLine = ctx.usageLine || 0;
+
+                if (!usageLine) {
+                  try {
+                    const parentContent = await fs.readFile(usagePath, "utf-8");
+                    const parentLines = parentContent.split("\n");
+                    const tagPattern = new RegExp("<" + ctx.name + "[\\s/>]");
+                    for (let li = 0; li < parentLines.length; li++) {
+                      if (tagPattern.test(parentLines[li])) {
+                        usageLine = li + 1;
+                        break;
+                      }
+                    }
+                  } catch {}
+                }
+
+                if (usageLine) {
+                  const usageShort = projectPath ? path.relative(projectPath, usagePath) : usagePath;
+                  const usageSnippet = await readSnippet(usagePath, usageLine);
+                  const usageLink = "cursor://file/" + usagePath + ":" + usageLine;
+                  prompt += "\n**Used at** " + usageShort + ":" + usageLine + "\n";
+                  prompt += usageLink + "\n";
+                  prompt += "```" + ext(usagePath) + "\n" + usageSnippet + "\n```\n";
+                }
               }
 
               const defSnippet = await readSnippet(defPath, ctx.line);

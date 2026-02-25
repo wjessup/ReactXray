@@ -311,7 +311,7 @@ function attachNodeEvents() {
                 const definedFile = treeNode?.component?.filePath || (node as HTMLElement).dataset.file || 'unknown';
                 const parentTreeNode = getParentNode(state.DISPLAY_TREE, nodeId);
                 const parentFile = parentTreeNode?.component?.filePath || parentTreeNode?.file || '';
-                const usageLine = treeNode?.source?.lineNumber || 0;
+                const usageLine = treeNode?.usageLine || treeNode?.source?.lineNumber || 0;
                 const hasUsageSite = parentFile && parentFile !== definedFile;
                 const ancestry = getAncestryNames(state.DISPLAY_TREE, nodeId);
                 addComponentToAiContext(
@@ -336,9 +336,26 @@ function attachNodeEvents() {
 
             if (target.classList.contains('usage-btn')) {
                 const usageFile = target.getAttribute('data-usage-file');
-                const usageLine = target.getAttribute('data-usage-line') || '1';
+                let usageLine = parseInt(target.getAttribute('data-usage-line') || '0', 10);
+                const compName = (node as HTMLElement).dataset.name!;
+                if (usageFile && !usageLine && compName) {
+                    fetch('/__source_file?path=' + encodeURIComponent(usageFile))
+                        .then(r => r.ok ? r.json() : null)
+                        .then(data => {
+                            if (data?.content) {
+                                const lines = data.content.split('\n');
+                                const re = new RegExp('<' + compName + '[\\s/>]');
+                                for (let i = 0; i < lines.length; i++) {
+                                    if (re.test(lines[i])) { usageLine = i + 1; break; }
+                                }
+                            }
+                            window.open('cursor://file/' + usageFile + ':' + (usageLine || 1));
+                        })
+                        .catch(() => window.open('cursor://file/' + usageFile + ':1'));
+                    return;
+                }
                 if (usageFile) {
-                    window.open('cursor://file/' + usageFile + ':' + usageLine);
+                    window.open('cursor://file/' + usageFile + ':' + (usageLine || 1));
                 }
                 return;
             }
