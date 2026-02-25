@@ -315,6 +315,17 @@ function attachNodeEvents() {
                 return;
             }
 
+            if (target.classList.contains('file-btn')) {
+                const nodeId = (node as HTMLElement).dataset.id!;
+                const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
+                const filePath = treeNode?.source?.fileName || (node as HTMLElement).dataset.file;
+                const lineNumber = treeNode?.source?.lineNumber || 1;
+                if (filePath && filePath !== 'unknown') {
+                    window.open('cursor://file/' + filePath + ':' + lineNumber);
+                }
+                return;
+            }
+
             selectNode();
             if (window.__updateStickyParents) window.__updateStickyParents();
         }, { capture: true });
@@ -335,17 +346,6 @@ function attachNodeEvents() {
             hideHoverHighlight();
         }, { capture: true });
 
-        header.addEventListener('dblclick', e => {
-            e.stopPropagation(); e.stopImmediatePropagation();
-            const nodeId = (node as HTMLElement).dataset.id!;
-            const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
-            const filePath = treeNode?.source?.fileName || (node as HTMLElement).dataset.file;
-            const lineNumber = treeNode?.source?.lineNumber || 1;
-            if (filePath && filePath !== 'unknown') {
-                const uri = 'cursor://file/' + filePath + ':' + lineNumber;
-                window.open(uri);
-            }
-        }, { capture: true });
     });
 
 }

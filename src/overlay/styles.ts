@@ -241,6 +241,15 @@ export const OVERLAY_CSS = `
 
   .ai-add-btn:hover { opacity: 1; }
 
+  .file-btn {
+    cursor: pointer;
+    opacity: 0.3;
+    font-size: 10px;
+    margin-left: 2px;
+  }
+
+  .file-btn:hover { opacity: 1; }
+
   .ai-result-body { padding: 8px 12px 10px; }
 
   .ai-result-prompt {
@@ -365,7 +374,7 @@ export const OVERLAY_CSS = `
   .node-header:hover { background: #21262d; }
   .node-header.selected { background: #388bfd44; outline: 2px solid #58a6ff; }
 
-  .toggle { color: #484f58; font-size: 9px; width: 9px; flex-shrink: 0; }
+  .toggle { color: #484f58; font-size: 11px; width: 11px; flex-shrink: 0; }
   .collapsed > .children { display: none; }
   .collapsed .toggle { transform: rotate(-90deg); }
 
@@ -538,16 +547,6 @@ export const OVERLAY_CSS = `
     position: relative;
   }
   
-  .children-slot::before {
-    content: '{children}';
-    position: absolute;
-    top: 0;
-    left: 8px;
-    color: #484f58;
-    font-size: 9px;
-    font-style: italic;
-  }
-
   .detail-overlay {
     position: fixed;
     top: 0;
