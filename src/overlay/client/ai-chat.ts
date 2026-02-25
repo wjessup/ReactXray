@@ -163,7 +163,7 @@ function renderAiBody(): HTMLElement {
     const sendBtn = h('button', {
         className: 'ai-send-btn' + (state.aiSending ? ' sending' : ''),
         onClick: (e: Event) => { e.stopPropagation(); handleSend(); },
-    }, state.aiSending ? 'Sending...' : 'Send  ⌘↵');
+    }, state.aiSending ? 'Generating...' : 'Generate prompt  ⌘↵');
 
     const hint = h('div', { className: 'ai-hint' }, 'Click ℹ on a tree node to add it as context');
 

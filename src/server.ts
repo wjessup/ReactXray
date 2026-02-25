@@ -298,7 +298,12 @@ function startProxyServer(
             }
 
             const ext = (p: string) => p.split(".").pop() || "tsx";
-            let prompt = "## Task\n" + message + "\n\n## Components\n";
+            let prompt = "## Task\n" + message + "\n\n";
+            prompt += "## Important\n";
+            prompt += "- When the task targets a specific instance of a component, make changes at the **Usage site** (the parent file where the component is rendered), NOT at the component definition.\n";
+            prompt += "- Only modify the **Component definition** if the change should apply to ALL instances of that component.\n";
+            prompt += "- Prefer passing props at the usage site over modifying the component internals.\n\n";
+            prompt += "## Components\n";
 
             for (const ctx of context) {
               const defPath = resolvePath(ctx.file);
@@ -308,7 +313,6 @@ function startProxyServer(
               cursorLinks.push(defLink);
 
               prompt += "\n### " + ancestryLabel + " (" + defShort + ")\n";
-              prompt += defLink + "\n";
 
               if (ctx.usageFile) {
                 const usagePath = resolvePath(ctx.usageFile);
@@ -332,14 +336,16 @@ function startProxyServer(
                   const usageShort = projectPath ? path.relative(projectPath, usagePath) : usagePath;
                   const usageSnippet = await readSnippet(usagePath, usageLine);
                   const usageLink = "cursor://file/" + usagePath + ":" + usageLine;
-                  prompt += "\n**Used at** " + usageShort + ":" + usageLine + "\n";
+                  cursorLinks.push(usageLink);
+                  prompt += "\n**Usage site (EDIT HERE for instance-specific changes):** `" + usageShort + ":" + usageLine + "`\n";
                   prompt += usageLink + "\n";
                   prompt += "```" + ext(usagePath) + "\n" + usageSnippet + "\n```\n";
                 }
               }
 
               const defSnippet = await readSnippet(defPath, ctx.line);
-              prompt += "\n**Defined at** " + defShort + ":" + ctx.line + "\n";
+              prompt += "\n**Component definition (reference, edit only for global changes):** `" + defShort + ":" + ctx.line + "`\n";
+              prompt += defLink + "\n";
               prompt += "```" + ext(defPath) + "\n" + defSnippet + "\n```\n";
             }
 
