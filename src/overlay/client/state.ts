@@ -36,7 +36,16 @@ export const state = {
     
     renderCounts: new Map<string, number>(),
     totalRenders: 0,
-    isMinified: false
+
+    aiOpen: false,
+    aiMessage: '',
+    aiContext: [] as Array<{ name: string; file: string; line: number }>,
+    aiSending: false,
+    aiResult: null as {
+        prompt: string;
+        files: Array<{ path: string; line: number; snippet: string }>;
+        cursorLinks: string[];
+    } | null,
 };
 
 export function saveState() {

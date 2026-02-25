@@ -165,6 +165,7 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             ${hooksHtml}
             ${dataFlowHtml}
             <span class="info-btn" title="View details">ℹ</span>
+            <span class="ai-add-btn" title="Add to AI context">+✨</span>
             ${renderCountHtml}
             <span class="file ${hasSource ? 'has-source' : ''}" title="${escapeHtml(rawFile)}">${escapeHtml(fileDisplay)}</span>
           </div>

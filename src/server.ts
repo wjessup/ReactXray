@@ -263,6 +263,71 @@ function startProxyServer(
         return;
       }
 
+      if (req.url?.startsWith("/__ai_chat") && req.method === "POST") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", async () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+            const message: string = body.message || "";
+            const context: Array<{ name: string; file: string; line: number }> = body.context || [];
+
+            const SNIPPET_RADIUS = 5;
+            const files: Array<{ path: string; line: number; snippet: string }> = [];
+            const cursorLinks: string[] = [];
+
+            for (const ctx of context) {
+              const filePath = ctx.file.startsWith("/")
+                ? ctx.file
+                : projectPath
+                  ? path.join(projectPath, ctx.file)
+                  : ctx.file;
+
+              const cursorLink = "cursor://file/" + filePath + ":" + ctx.line;
+              cursorLinks.push(cursorLink);
+
+              try {
+                const content = await fs.readFile(filePath, "utf-8");
+                const lines = content.split("\n");
+                const start = Math.max(0, ctx.line - SNIPPET_RADIUS - 1);
+                const end = Math.min(lines.length, ctx.line + SNIPPET_RADIUS);
+                const snippet = lines.slice(start, end).join("\n");
+                files.push({ path: filePath, line: ctx.line, snippet });
+              } catch {
+                files.push({ path: filePath, line: ctx.line, snippet: "// Could not read file" });
+              }
+            }
+
+            const ext = (p: string) => p.split(".").pop() || "tsx";
+            let prompt = "## Task\n" + message + "\n\n## Components\n";
+            for (let i = 0; i < files.length; i++) {
+              const f = files[i];
+              const shortPath = projectPath ? path.relative(projectPath, f.path) : f.path;
+              prompt += "\n### " + shortPath + ":" + f.line + "\n";
+              prompt += cursorLinks[i] + "\n";
+              prompt += "```" + ext(f.path) + "\n" + f.snippet + "\n```\n";
+            }
+
+            res.setHeader("Content-Type", "application/json");
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.end(JSON.stringify({ prompt, files, cursorLinks }));
+          } catch (err) {
+            res.statusCode = 500;
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.end(JSON.stringify({ error: (err as Error).message }));
+          }
+        });
+        return;
+      }
+
+      if (req.url?.startsWith("/__ai_chat") && req.method === "OPTIONS") {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.end();
+        return;
+      }
+
       if (req.url?.startsWith("/__save_calculated_tree") && req.method === "POST") {
         const chunks: Buffer[] = [];
         req.on("data", (chunk) => chunks.push(chunk));

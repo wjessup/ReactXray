@@ -16,6 +16,7 @@ import { getFilterEnabled, getStaticComponent, refreshAnalysis, toggle, toggleFi
 import { showSettingsDialog } from './settings';
 
 import { filterIgnoredNodes, renderTreeContainer } from './treeRenderer';
+import { renderAiSection, addComponentToAiContext } from './ai-chat';
 
 export function renderPanel() {
     if (!state.container) return;
@@ -57,6 +58,7 @@ export function renderPanel() {
         <div class="search">
           <input type="text" placeholder="Search components..." value="${escapeHtml(state.searchTerm)}">
         </div>
+        <div class="ai-section"></div>
         <div class="tree-container">
           <div class="sticky-parents"></div>
           <div class="tree"></div>
@@ -71,6 +73,7 @@ export function renderPanel() {
     }
 
     state.container.style.setProperty('--panel-width', state.panelWidth + 'px');
+    renderAiSection();
     attachPanelEvents();
     attachNodeEvents();
 }
@@ -323,6 +326,17 @@ function attachNodeEvents() {
                 const { treeNode, domEl } = selectNode();
                 if (window.__updateStickyParents) window.__updateStickyParents();
                 if (treeNode) showDetailDialog(treeNode, domEl);
+                return;
+            }
+
+            if (target.classList.contains('ai-add-btn')) {
+                const nodeName = (node as HTMLElement).dataset.name!;
+                const nodeFile = (node as HTMLElement).dataset.file || 'unknown';
+                const nodeId = (node as HTMLElement).dataset.id!;
+                const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
+                const line = treeNode?.source?.lineNumber || 1;
+                addComponentToAiContext(nodeName, nodeFile, line);
+                if (!state.aiOpen) { state.aiOpen = true; renderAiSection(); }
                 return;
             }
 
