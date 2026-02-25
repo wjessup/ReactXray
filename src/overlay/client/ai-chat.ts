@@ -1,10 +1,10 @@
 import { state } from './state';
 import { h } from './utils';
 
-export function addComponentToAiContext(name: string, file: string, line: number) {
-    const already = state.aiContext.some(c => c.name === name && c.file === file);
+export function addComponentToAiContext(name: string, file: string, line: number, ancestry: string[] = []) {
+    const already = state.aiContext.some(c => c.name === name && c.file === file && c.ancestry.join('>') === ancestry.join('>'));
     if (already) return;
-    state.aiContext.push({ name, file, line });
+    state.aiContext.push({ name, file, line, ancestry });
     renderAiSection();
 }
 
@@ -122,7 +122,8 @@ function renderResultView(): HTMLElement {
 function renderContextChips(): HTMLElement {
     const chips = state.aiContext.map((ctx, i) => {
         const fileName = ctx.file.split('/').pop() || ctx.file;
-        const label = ctx.name + ' (' + fileName + ':' + ctx.line + ')';
+        const ancestryPrefix = ctx.ancestry.length > 0 ? ctx.ancestry.join(' > ') + ' > ' : '';
+        const label = ancestryPrefix + ctx.name + ' (' + fileName + ':' + ctx.line + ')';
 
         return h('div', { className: 'ai-chip' },
             h('span', { className: 'ai-chip-label' }, label),

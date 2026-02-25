@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   buildFiberLookupByName,
   findNodeIdForFiber,
-  findInstanceIndexForFiber,
   getNodeByPath,
   mergeStaticWithFiber,
   sortFiberLookupForMerge,
@@ -176,7 +175,7 @@ describe("overlay runtime logic", () => {
     expect(merged[1].children[0].fiber).toBe(dropsCardFiber);
   });
 
-  it("collects multiple instances when parentFiber is known", () => {
+  it("assigns one fiber per static node", () => {
     const wrapperFiber: any = {};
     const card1Fiber: any = { return: wrapperFiber };
     const card2Fiber: any = { return: wrapperFiber };
@@ -222,14 +221,9 @@ describe("overlay runtime logic", () => {
 
     const specimenNode = merged[0].children[0];
     expect(specimenNode.fiber).toBe(card1Fiber);
-    expect(specimenNode.instances).toBeDefined();
-    expect(specimenNode.instances.length).toBe(3);
-    expect(specimenNode.instances[0].fiber).toBe(card1Fiber);
-    expect(specimenNode.instances[1].fiber).toBe(card2Fiber);
-    expect(specimenNode.instances[2].fiber).toBe(card3Fiber);
   });
 
-  it("partitions instances by parent fiber across sections", () => {
+  it("assigns one fiber per static node across sections", () => {
     const featuredWrapper: any = {};
     const dropsWrapper: any = {};
     const featuredCard1: any = { return: featuredWrapper };
@@ -304,35 +298,10 @@ describe("overlay runtime logic", () => {
     const merged = mergeStaticWithFiber(staticTree as any[], lookup);
 
     const featuredSpecimen = merged[0].children[0];
-    expect(featuredSpecimen.instances.length).toBe(2);
-    expect(featuredSpecimen.instances[0].fiber).toBe(featuredCard1);
-    expect(featuredSpecimen.instances[1].fiber).toBe(featuredCard2);
+    expect(featuredSpecimen.fiber).toBe(featuredCard1);
 
     const dropsSpecimen = merged[1].children[0];
-    expect(dropsSpecimen.instances.length).toBe(3);
-    expect(dropsSpecimen.instances[0].fiber).toBe(dropsCard1);
-    expect(dropsSpecimen.instances[1].fiber).toBe(dropsCard2);
-    expect(dropsSpecimen.instances[2].fiber).toBe(dropsCard3);
-  });
-
-  it("findInstanceIndexForFiber returns correct index", () => {
-    const card1Fiber: any = {};
-    const card2Fiber: any = { return: card1Fiber };
-    const card3Fiber: any = { return: card2Fiber };
-    const childFiber: any = { return: card2Fiber };
-
-    const node = {
-      instances: [
-        { fiber: card1Fiber },
-        { fiber: card2Fiber },
-        { fiber: card3Fiber },
-      ],
-    };
-
-    expect(findInstanceIndexForFiber(node, card1Fiber)).toBe(0);
-    expect(findInstanceIndexForFiber(node, card2Fiber)).toBe(1);
-    expect(findInstanceIndexForFiber(node, card3Fiber)).toBe(2);
-    expect(findInstanceIndexForFiber(node, childFiber)).toBe(1);
+    expect(dropsSpecimen.fiber).toBe(dropsCard1);
   });
 
   it("getNodeByPath retrieves the correct node", () => {

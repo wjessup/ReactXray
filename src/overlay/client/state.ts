@@ -31,15 +31,12 @@ export const state = {
     
     selectedFiber: null as any,
     selectedElement: null as any,
-    expandedInstanceGroups: new Set<string>(),
-    selectedInstanceByGroup: new Map<string, number>(),
-    
     renderCounts: new Map<string, number>(),
     totalRenders: 0,
 
     aiOpen: false,
     aiMessage: '',
-    aiContext: [] as Array<{ name: string; file: string; line: number }>,
+    aiContext: [] as Array<{ name: string; file: string; line: number; ancestry: string[] }>,
     aiSending: false,
     aiResult: null as {
         prompt: string;

@@ -873,13 +873,17 @@ function buildComponentTree(
 
     const allProjectComponents = getAllProjectComponentsFromFile(file);
     for (const childName of allProjectComponents) {
-      const alreadyAdded = children.some(
-        (c) => c.component?.name === childName || c.file.includes(childName),
-      );
-      if (alreadyAdded) continue;
+      const existingCount = children.filter(
+        (c) => c.component?.name === childName,
+      ).length;
+      const targetCount = fileJsxUsage?.directChildrenCounts?.get(childName) || 1;
+      const remaining = Math.max(0, targetCount - existingCount);
+      if (remaining === 0) continue;
 
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !isCircular(childName, childFile, currentPath)) {
+      if (!childFile || isCircular(childName, childFile, currentPath)) continue;
+
+      for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
           fileJsxUsage || null,
@@ -962,13 +966,17 @@ function buildComponentTree(
 
     const allProjectComponents = getAllProjectComponentsFromFile(file);
     for (const childName of allProjectComponents) {
-      const alreadyAdded = children.some(
-        (c) => c.component?.name === childName || c.file.includes(childName),
-      );
-      if (alreadyAdded) continue;
+      const existingCount = children.filter(
+        (c) => c.component?.name === childName,
+      ).length;
+      const targetCount = fileJsxUsage?.directChildrenCounts?.get(childName) || 1;
+      const remaining = Math.max(0, targetCount - existingCount);
+      if (remaining === 0) continue;
 
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !isCircular(childName, childFile, currentPath)) {
+      if (!childFile || isCircular(childName, childFile, currentPath)) continue;
+
+      for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
           fileJsxUsage || null,

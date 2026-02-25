@@ -65,11 +65,6 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
         const isBridge = node.isBridge;
         const hasFiber = node.hasFiber;
 
-        const instanceCount = node.instances?.length || 0;
-        const hasInstances = instanceCount > 1;
-        const isExpanded = state.expandedInstanceGroups.has(nodeId);
-        const selectedIdx = state.selectedInstanceByGroup.get(nodeId) ?? -1;
-
         const badges = [];
 
         if (staticComp?.nextjsFileType) {
@@ -97,11 +92,6 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             badges.push('<span class="badge client inherited" title="RUNS ON CLIENT (inherited, dashed blue)&#10;&#10;This file has NO \'use client\' directive, but runs on the client anyway!&#10;&#10;A parent component with \'use client\' imports this file.">↳ client</span>');
         } else if (!staticComp?.isClientComponent && staticComp && !hasFiber) {
             badges.push('<span class="badge server" title="SERVER COMPONENT (green)&#10;&#10;This component renders on the server.">SERVER</span>');
-        }
-
-        if (hasInstances) {
-            const instanceBadge = '<span class="badge instance-count" data-group="' + nodeId + '" title="' + instanceCount + ' instances of this component. Click to ' + (isExpanded ? 'collapse' : 'expand') + '.">(x' + instanceCount + ')</span>';
-            badges.push(instanceBadge);
         }
 
         if (node.renderCondition) {
@@ -137,28 +127,13 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             ? '<span class="render-count server-only" title="Server-rendered">—</span>'
             : '<span class="render-count" style="' + (renderCount === 0 ? 'opacity:0.3' : '') + '">' + renderCount + '</span>';
 
-        let instanceRowsHtml = '';
-        if (hasInstances && isExpanded) {
-            const maxToShow = Math.min(instanceCount, 200);
-            let rows = '';
-            for (let idx = 0; idx < maxToShow; idx++) {
-                const instId = nodeId + ':' + idx;
-                const isSelected = idx === selectedIdx;
-                rows += '<div class="instance-row' + (isSelected ? ' selected' : '') + '" data-instance-id="' + instId + '" data-group="' + nodeId + '" data-idx="' + idx + '"><span class="instance-label">' + name + ' (' + (idx + 1) + '/' + instanceCount + ')</span></div>';
-            }
-            if (instanceCount > 200) {
-                rows += '<div class="instance-row capped">...and ' + (instanceCount - 200) + ' more</div>';
-            }
-            instanceRowsHtml = '<div class="instance-list">' + rows + '</div>';
-        }
-
         const nodeClasses = ['node', matches ? '' : 'hidden', isServerOnly ? 'server-only' : '', isBridge ? 'bridge' : ''].filter(Boolean).join(' ');
         const childrenHtml = hasChildren ? '<div class="children">' + renderTree(node.children, depth + 1, nodeId) + '</div>' : '';
 
         return `
         <div class="${nodeClasses}" data-depth="${depth}" data-name="${name}" data-file="${rawFile}" data-id="${nodeId}">
           <div class="node-header">
-            <span class="toggle">${hasChildren || hasInstances ? '▼' : '•'}</span>
+            <span class="toggle">${hasChildren ? '▼' : '•'}</span>
             <span class="name">${escapeHtml(name)}</span>
             ${badgesHtml}
             ${propsHtml}
@@ -169,7 +144,6 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             ${renderCountHtml}
             <span class="file ${hasSource ? 'has-source' : ''}" title="${escapeHtml(rawFile)}">${escapeHtml(fileDisplay)}</span>
           </div>
-          ${instanceRowsHtml}
           ${childrenHtml}
         </div>
       `;

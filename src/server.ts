@@ -270,10 +270,10 @@ function startProxyServer(
           try {
             const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
             const message: string = body.message || "";
-            const context: Array<{ name: string; file: string; line: number }> = body.context || [];
+            const context: Array<{ name: string; file: string; line: number; ancestry?: string[] }> = body.context || [];
 
             const SNIPPET_RADIUS = 5;
-            const files: Array<{ path: string; line: number; snippet: string }> = [];
+            const files: Array<{ path: string; line: number; snippet: string; ancestry: string[] }> = [];
             const cursorLinks: string[] = [];
 
             for (const ctx of context) {
@@ -292,9 +292,9 @@ function startProxyServer(
                 const start = Math.max(0, ctx.line - SNIPPET_RADIUS - 1);
                 const end = Math.min(lines.length, ctx.line + SNIPPET_RADIUS);
                 const snippet = lines.slice(start, end).join("\n");
-                files.push({ path: filePath, line: ctx.line, snippet });
+                files.push({ path: filePath, line: ctx.line, snippet, ancestry: ctx.ancestry || [] });
               } catch {
-                files.push({ path: filePath, line: ctx.line, snippet: "// Could not read file" });
+                files.push({ path: filePath, line: ctx.line, snippet: "// Could not read file", ancestry: ctx.ancestry || [] });
               }
             }
 
@@ -303,7 +303,8 @@ function startProxyServer(
             for (let i = 0; i < files.length; i++) {
               const f = files[i];
               const shortPath = projectPath ? path.relative(projectPath, f.path) : f.path;
-              prompt += "\n### " + shortPath + ":" + f.line + "\n";
+              const ancestryLabel = f.ancestry.length > 0 ? f.ancestry.join(" > ") + " > " + context[i].name : context[i].name;
+              prompt += "\n### " + ancestryLabel + " (" + shortPath + ":" + f.line + ")\n";
               prompt += cursorLinks[i] + "\n";
               prompt += "```" + ext(f.path) + "\n" + f.snippet + "\n```\n";
             }

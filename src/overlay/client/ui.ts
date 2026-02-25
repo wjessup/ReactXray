@@ -5,6 +5,7 @@ import {
     findFirstNodeWithName,
     findNodeByAncestry,
     findNodeById,
+    getAncestryNames,
     getDomFromFiber,
     getFiberName,
     hasAnyFiberDescendant,
@@ -259,6 +260,10 @@ function attachNodeEvents() {
                 domEl = state.selectedElement || getDomFromFiber(state.selectedFiber);
             }
 
+            if (!domEl && treeNode) {
+                domEl = findBestMatchingElement(state.DISPLAY_TREE, treeNode, nodeId);
+            }
+
             const isRealNode = domEl instanceof Node;
             const isInDocument = isRealNode ? document.contains(domEl) : (domEl?._elements?.some((el: Element) => document.contains(el)) ?? false);
 
@@ -284,41 +289,10 @@ function attachNodeEvents() {
             const target = e.target as HTMLElement;
 
             if (target.classList.contains('toggle')) {
-                const nodeId = (node as HTMLElement).dataset.id!;
-                const hasInstanceList = node!.querySelector('.instance-list');
                 const hasChildrenEl = node!.querySelector('.children');
-                if (hasInstanceList || hasChildrenEl) {
-                    if (state.expandedInstanceGroups.has(nodeId)) {
-                        state.expandedInstanceGroups.delete(nodeId);
-                    }
+                if (hasChildrenEl) {
                     node!.classList.toggle('collapsed');
-                    if (!node!.classList.contains('collapsed') && !hasInstanceList) {
-                        const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
-                        if (treeNode?.instances?.length > 1) {
-                            state.expandedInstanceGroups.add(nodeId);
-                            const treeEl = state.shadow?.querySelector('.tree');
-                            const savedScroll = treeEl ? treeEl.scrollTop : 0;
-                            renderPanel();
-                            const newTreeEl = state.shadow?.querySelector('.tree');
-                            if (newTreeEl) newTreeEl.scrollTop = savedScroll;
-                        }
-                    }
                 }
-                return;
-            }
-
-            if (target.classList.contains('instance-count')) {
-                const groupId = target.dataset.group!;
-                if (state.expandedInstanceGroups.has(groupId)) {
-                    state.expandedInstanceGroups.delete(groupId);
-                } else {
-                    state.expandedInstanceGroups.add(groupId);
-                }
-                const treeEl = state.shadow?.querySelector('.tree');
-                const savedScroll = treeEl ? treeEl.scrollTop : 0;
-                renderPanel();
-                const newTreeEl = state.shadow?.querySelector('.tree');
-                if (newTreeEl) newTreeEl.scrollTop = savedScroll;
                 return;
             }
 
@@ -335,7 +309,8 @@ function attachNodeEvents() {
                 const nodeId = (node as HTMLElement).dataset.id!;
                 const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
                 const line = treeNode?.source?.lineNumber || 1;
-                addComponentToAiContext(nodeName, nodeFile, line);
+                const ancestry = getAncestryNames(state.DISPLAY_TREE, nodeId);
+                addComponentToAiContext(nodeName, nodeFile, line, ancestry);
                 if (!state.aiOpen) { state.aiOpen = true; renderAiSection(); }
                 return;
             }
@@ -373,53 +348,6 @@ function attachNodeEvents() {
         }, { capture: true });
     });
 
-    state.shadow.querySelectorAll('.instance-row').forEach(row => {
-        if (row.classList.contains('capped')) return;
-
-        row.addEventListener('click', e => {
-            e.stopPropagation(); e.stopImmediatePropagation();
-            const groupId = (row as HTMLElement).dataset.group!;
-            const idx = parseInt((row as HTMLElement).dataset.idx!, 10);
-            state.selectedInstanceByGroup.set(groupId, idx);
-
-            state.shadow!.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
-            row.classList.add('selected');
-
-            const treeNode = findNodeById(state.DISPLAY_TREE, groupId);
-            if (treeNode?.instances?.[idx]) {
-                const inst = treeNode.instances[idx];
-                const domEl = getDomFromFiber(inst.fiber);
-                const name = treeNode.component?.name || '—';
-                if (domEl) {
-                    showSelectedHighlight(domEl, name + ' (' + (idx + 1) + ')');
-                    const treeEl = state.shadow?.querySelector('.tree');
-                    if (treeEl) {
-                        const rect = row.getBoundingClientRect();
-                        const treeRect = treeEl.getBoundingClientRect();
-                        treeEl.scrollTop += (rect.top - treeRect.top) - (treeRect.height / 2) + (rect.height / 2);
-                    }
-                }
-            }
-        }, { capture: true });
-
-        row.addEventListener('mouseenter', e => {
-            e.stopPropagation();
-            const groupId = (row as HTMLElement).dataset.group!;
-            const idx = parseInt((row as HTMLElement).dataset.idx!, 10);
-            const treeNode = findNodeById(state.DISPLAY_TREE, groupId);
-            if (treeNode?.instances?.[idx]) {
-                const inst = treeNode.instances[idx];
-                const domEl = getDomFromFiber(inst.fiber);
-                const name = treeNode.component?.name || '—';
-                if (domEl) showHoverHighlight(domEl, name + ' (' + (idx + 1) + ')');
-            }
-        }, { capture: true });
-
-        row.addEventListener('mouseleave', e => {
-            e.stopPropagation();
-            hideHoverHighlight();
-        }, { capture: true });
-    });
 }
 
 export function selectTreeNodeById(nodeId: string): boolean {

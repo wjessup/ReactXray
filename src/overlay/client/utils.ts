@@ -300,6 +300,20 @@ export function findElementsByComponentName(name: string): Element[] {
     return results;
 }
 
+export function getAncestryNames(displayTree: any[], nodeId: string): string[] {
+    const parts = nodeId.split('-').map(Number);
+    const names: string[] = [];
+    let current = displayTree;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const node = current[parts[i]];
+        if (!node) break;
+        const name = node.component?.name;
+        if (name) names.push(name);
+        current = node.children || [];
+    }
+    return names;
+}
+
 export function getParentName(displayTree: any[], nodeId: string): string | null {
     const parts = nodeId.split('-').map(Number);
     if (parts.length < 2) return null;

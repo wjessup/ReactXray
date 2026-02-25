@@ -5,7 +5,6 @@ import { setupRenderTracking } from './render-tracking';
 import { showHoverHighlight, hideHoverHighlight, showSelectedHighlight, hideSelectedHighlight } from './highlight';
 import { isOverlayElement, getFiberFromElement, getFiberName, getDomFromFiber, getComponentStack } from './utils';
 import { refreshAnalysis, checkForRouteChange, buildStaticComponentMap, loadComponentAllowlist, refreshFiberTree, toggle } from './logic';
-import { findInstanceIndexForFiber, getNodeByPath } from '../runtime-logic.js';
 
 // Declarations
 declare global {
@@ -79,28 +78,6 @@ function enableInspectMode() {
 
             if (!chosenName) {
                 selectedNodeId = selectTreeNodeByStack(stack);
-            }
-
-            if (selectedNodeId && fiber) {
-                const treeNode = getNodeByPath(state.DISPLAY_TREE, selectedNodeId);
-                if (treeNode?.instances?.length > 1) {
-                    const instIdx = findInstanceIndexForFiber(treeNode, fiber);
-                    if (instIdx >= 0) {
-                        if (!state.expandedInstanceGroups.has(selectedNodeId)) {
-                            state.expandedInstanceGroups.add(selectedNodeId);
-                        }
-                        state.selectedInstanceByGroup.set(selectedNodeId, instIdx);
-                        renderPanel();
-
-                        const instId = selectedNodeId + ':' + instIdx;
-                        const instRow = state.shadow?.querySelector('.instance-row[data-instance-id="' + instId + '"]');
-                        if (instRow) {
-                            state.shadow!.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
-                            instRow.classList.add('selected');
-                            instRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        }
-                    }
-                }
             }
 
             showSelectedHighlight(domEl, chosenName || name);

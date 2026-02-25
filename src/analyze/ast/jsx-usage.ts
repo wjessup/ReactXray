@@ -9,6 +9,7 @@ export interface ConditionalChild {
 
 export interface JsxUsage {
   directChildren: string[];
+  directChildrenCounts: Map<string, number>;
   nestedInComponent: Map<string, string[]>;
   identifiersInComponent: Map<string, string[]>;
   conditionalChildren: Map<string, ConditionalChild[]>;
@@ -21,6 +22,7 @@ interface ConditionalContext {
 
 export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
   const directChildren = new Set<string>();
+  const directChildrenCounts = new Map<string, number>();
   const nestedInComponent = new Map<string, Set<string>>();
   const identifiersInComponent = new Map<string, Set<string>>();
   const conditionalChildren = new Map<string, ConditionalChild[]>();
@@ -34,6 +36,9 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
       nestedInComponent.get(parentName)!.add(childName);
     } else {
       directChildren.add(childName);
+      if (!condition) {
+        directChildrenCounts.set(childName, (directChildrenCounts.get(childName) || 0) + 1);
+      }
     }
     
     if (condition && /^[A-Z]/.test(childName)) {
@@ -185,6 +190,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
 
   const result: JsxUsage = {
     directChildren: Array.from(directChildren),
+    directChildrenCounts,
     nestedInComponent: new Map(),
     identifiersInComponent: new Map(),
     conditionalChildren,
