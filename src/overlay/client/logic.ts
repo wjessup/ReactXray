@@ -136,6 +136,20 @@ function annotateFiberPositions(nodes: any[]) {
     }
 }
 
+function detectMinified(nodes: any[]): boolean {
+    const names: string[] = [];
+    function collect(list: any[]) {
+        for (const n of list) {
+            if (n.name) names.push(n.name);
+            if (n.children) collect(n.children);
+        }
+    }
+    collect(nodes);
+    if (names.length < 3) return false;
+    const singleChar = names.filter(n => n.length <= 2).length;
+    return singleChar / names.length > 0.5;
+}
+
 function countServerOnlyNodes(nodes: any[]): number {
     return nodes.reduce((acc, n) => {
         const isSelf = n.isServerOnly ? 1 : 0;
@@ -179,6 +193,7 @@ function saveCalculatedTree() {
 export function refreshFiberTree() {
     resetFiberKeyCache();
     state.FIBER_TREE = captureFullFiberTree();
+    state.isMinified = detectMinified(state.FIBER_TREE);
 
     if (state.FIBER_TREE.length === 0) return;
 

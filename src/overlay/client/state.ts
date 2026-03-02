@@ -35,6 +35,7 @@ export const state = {
     elementToFiberMap: new WeakMap<Element, any>(),
     renderCounts: new Map<string, number>(),
     totalRenders: 0,
+    isMinified: false,
 
     aiOpen: false,
     aiMessage: '',
