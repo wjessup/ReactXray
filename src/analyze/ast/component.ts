@@ -12,6 +12,11 @@ const COMPONENT_WRAPPERS = [
   "React.memo",
 ];
 
+/** Known factory functions that return [Provider, useHook] or similar component tuples */
+const COMPONENT_FACTORIES = [
+  "constate",
+];
+
 export function extractComponentFromFile(
   sourceFile: SourceFile,
   relativePath: string
@@ -174,6 +179,64 @@ function extractFromNode(
         isServerComponent,
         nextjsFileType,
       };
+    }
+  }
+
+  // Handle array destructuring from component factories
+  // e.g., const [Provider, useHook] = constate(useCreatorFn)
+  if (Node.isBindingElement(node)) {
+    const bindingName = node.getName();
+    if (!/^[A-Z]/.test(bindingName)) return null;
+
+    const bindingPattern = node.getParent();
+    const varDecl = bindingPattern?.getParent();
+    if (varDecl && Node.isVariableDeclaration(varDecl)) {
+      const init = varDecl.getInitializer();
+      if (init && Node.isCallExpression(init)) {
+        const callee = init.getExpression().getText();
+        if (COMPONENT_FACTORIES.some(f => callee === f || callee.endsWith("." + f))) {
+          // Try to extract props/hooks from the creator function argument
+          const args = init.getArguments();
+          let creatorFunc: Node | null = null;
+          if (args.length > 0) {
+            const firstArg = args[0];
+            if (Node.isArrowFunction(firstArg) || Node.isFunctionExpression(firstArg)) {
+              creatorFunc = firstArg;
+            } else if (Node.isIdentifier(firstArg)) {
+              // Resolve the identifier to its declaration
+              const sym = firstArg.getSymbol();
+              if (sym) {
+                for (const decl of sym.getDeclarations()) {
+                  if (Node.isFunctionDeclaration(decl) || Node.isVariableDeclaration(decl)) {
+                    const funcInit = Node.isVariableDeclaration(decl) ? decl.getInitializer() : decl;
+                    if (funcInit && (Node.isArrowFunction(funcInit) || Node.isFunctionExpression(funcInit) || Node.isFunctionDeclaration(funcInit))) {
+                      creatorFunc = funcInit;
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          const props: PropInfo[] = [{ name: "children", type: "React.ReactNode", optional: true }];
+          if (creatorFunc) {
+            // Add the creator function's own props (these become the Provider's props)
+            const creatorProps = extractProps(creatorFunc);
+            props.push(...creatorProps);
+          }
+
+          return {
+            name: bindingName,
+            filePath,
+            props,
+            hooks: creatorFunc ? findHooks(creatorFunc) : [],
+            serverQueries: [],
+            isClientComponent,
+            isServerComponent,
+            nextjsFileType,
+          };
+        }
+      }
     }
   }
 
