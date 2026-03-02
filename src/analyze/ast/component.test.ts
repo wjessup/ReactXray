@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Project } from "ts-morph";
-import { extractComponentFromFile } from "./component.js";
+import { extractComponentFromFile, extractAllComponentsFromFile } from "./component.js";
 
 function parseComponent(code: string, filename = "test.tsx") {
   const project = new Project({
@@ -289,6 +289,82 @@ describe("extractComponentFromFile", () => {
       const info = extractComponentFromFile(sf, "page.tsx");
       expect(info).not.toBeNull();
       expect(info!.name).toBe("Page");
+    });
+  });
+
+  describe("component factory detection (constate)", () => {
+    it("detects Provider from constate with named creator function", () => {
+      const sf = parseComponent(`
+        "use client";
+        import constate from "constate";
+
+        const useAnalyticsCreator = ({ apiKey }: { apiKey: string }) => {
+          return { captureEvent: () => {} };
+        };
+
+        const [AnalyticsProvider, useAnalytics] = constate(useAnalyticsCreator);
+        export { AnalyticsProvider, useAnalytics };
+      `);
+      const all = extractAllComponentsFromFile(sf, "AnalyticsProvider.tsx");
+      const provider = all.find(c => c.name === "AnalyticsProvider");
+      expect(provider).toBeDefined();
+      expect(provider!.isClientComponent).toBe(true);
+      expect(provider!.props.find(p => p.name === "children")).toBeDefined();
+      expect(provider!.props.find(p => p.name === "apiKey")).toBeDefined();
+    });
+
+    it("detects Provider from constate with inline arrow function", () => {
+      const sf = parseComponent(`
+        "use client";
+        import constate from "constate";
+
+        const [ThemeProvider, useTheme] = constate(({ mode }: { mode: string }) => {
+          return { mode };
+        });
+        export { ThemeProvider, useTheme };
+      `);
+      const all = extractAllComponentsFromFile(sf, "ThemeProvider.tsx");
+      const provider = all.find(c => c.name === "ThemeProvider");
+      expect(provider).toBeDefined();
+      expect(provider!.props.find(p => p.name === "children")).toBeDefined();
+      expect(provider!.props.find(p => p.name === "mode")).toBeDefined();
+    });
+
+    it("extracts hooks from constate creator function", () => {
+      const sf = parseComponent(`
+        "use client";
+        import constate from "constate";
+
+        const useChatsCreator = () => {
+          const [chats, setChats] = useState([]);
+          const queryClient = useQueryClient();
+          return { chats };
+        };
+
+        const [UserChatsProvider, useUserChats] = constate(useChatsCreator);
+        export { UserChatsProvider, useUserChats };
+      `);
+      const all = extractAllComponentsFromFile(sf, "UserChatsProvider.tsx");
+      const provider = all.find(c => c.name === "UserChatsProvider");
+      expect(provider).toBeDefined();
+      expect(provider!.hooks).toContain("useState");
+      expect(provider!.hooks).toContain("useQueryClient");
+    });
+
+    it("does not detect lowercase exports from constate as components", () => {
+      const sf = parseComponent(`
+        "use client";
+        import constate from "constate";
+
+        const useCreator = () => ({ value: 1 });
+        const [MyProvider, useMyHook] = constate(useCreator);
+        export { MyProvider, useMyHook };
+      `);
+      const all = extractAllComponentsFromFile(sf, "provider.tsx");
+      const hook = all.find(c => c.name === "useMyHook");
+      expect(hook).toBeUndefined();
+      const provider = all.find(c => c.name === "MyProvider");
+      expect(provider).toBeDefined();
     });
   });
 });
