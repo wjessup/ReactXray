@@ -56,6 +56,7 @@ async function handleSend() {
 function handleNewMessage() {
     state.aiResult = null;
     state.aiMessage = '';
+    state.aiContext = [];
     renderAiSection();
 }
 
@@ -102,7 +103,7 @@ function renderResultView(): HTMLElement {
     const cursorBtn = h('button', {
         className: 'ai-cursor-btn',
         onClick: (e: Event) => { e.stopPropagation(); handleOpenInCursor(); },
-    }, 'Open Files in Cursor');
+    }, 'Open File in Cursor');
 
     const newBtn = h('button', {
         className: 'ai-new-btn',
