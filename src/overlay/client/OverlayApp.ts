@@ -1,11 +1,20 @@
 import { OVERLAY_CSS, HIGHLIGHT_CSS } from '../styles.js';
 import { state, callbacks } from './state';
-import { renderPanel, selectTreeNodeByStack } from './ui';
+import { renderPanel, selectTreeNodeById, selectTreeNodeByStack } from './ui';
 import { setupRenderTracking } from './render-tracking';
 import { showHoverHighlight, hideHoverHighlight, showSelectedHighlight, hideSelectedHighlight } from './highlight';
-import { isOverlayElement, getFiberFromElement, getFiberName, getDomFromFiber, getComponentStack } from './utils';
+import { isOverlayElement, getFiberFromElement, getReactFiber, getFiberName, getDomFromFiber, getComponentStack, findNodeById, resetFiberKeyCache } from './utils';
 import { refreshAnalysis, checkForRouteChange, buildStaticComponentMap, loadComponentAllowlist, refreshFiberTree, toggle } from './logic';
-import { findInstanceIndexForFiber, getNodeByPath } from '../runtime-logic.js';
+import { findNodeIdForFiber } from '../runtime-logic.js';
+
+function countDisplayNodes(nodes: any[]): number {
+    let count = 0;
+    for (const n of nodes) {
+        if (n.component) count++;
+        if (n.children) count += countDisplayNodes(n.children);
+    }
+    return count;
+}
 
 // Declarations
 declare global {
@@ -54,56 +63,159 @@ function enableInspectMode() {
         const name = fiber ? getFiberName(fiber) : null;
         const domEl = fiber ? getDomFromFiber(fiber) : e.target;
 
-        if (name) {
-            const SKIP = new Set([
-                'Image', 'Link', 'LinkComponent', 'Icon', 'Typography',
-                'PreprocessedImage', 'TooltipTrigger', 'ScrollArea', 'ScrollAreaProvider',
-            ]);
+        const dbg: string[] = [];
+        dbg.push(`[Inspector] Clicked element: <${(e.target as Element)?.tagName?.toLowerCase()}>`);
+        dbg.push(`[Inspector] Fiber found: ${!!fiber}, Name: "${name}"`);
 
+        if (name) {
             const stack = getComponentStack(e.target);
+            dbg.push(`[Inspector] Component stack: [${stack.join(' → ')}]`);
+
             let chosenName: string | null = null;
             let selectedNodeId: string | null = null;
 
-            for (let i = 0; i < stack.length; i++) {
-                const target = stack[i];
-                if (!target || SKIP.has(target)) continue;
-                selectedNodeId = selectTreeNodeByStack(stack.slice(i));
+            let fiberAncestorMatch: { nodeId: string; name: string } | null = null;
+
+            if (fiber) {
+                selectedNodeId = findNodeIdForFiber(state.DISPLAY_TREE, fiber);
                 if (selectedNodeId) {
-                    chosenName = target;
-                    break;
+                    const matchedNode = findNodeById(state.DISPLAY_TREE, selectedNodeId);
+                    const matchedName = matchedNode?.component?.name;
+                    if (matchedName === name) {
+                        selectTreeNodeById(selectedNodeId);
+                        chosenName = name;
+                        dbg.push(`[Inspector] ✓ Direct fiber match: "${name}" at ${selectedNodeId}`);
+                    } else {
+                        // Save as fallback — fiber ancestry found a tree node but name differs
+                        // (common for server-rendered elements whose fiber is a framework internal)
+                        fiberAncestorMatch = { nodeId: selectedNodeId, name: matchedName || name };
+                        dbg.push(`[Inspector] Fiber → "${matchedName}" (wanted "${name}"), trying stack`);
+                        selectedNodeId = null;
+                    }
                 }
             }
 
-            state.selectedFiber = fiber;
-            state.selectedElement = domEl;
-
-            if (!chosenName) {
+            if (!selectedNodeId) {
                 selectedNodeId = selectTreeNodeByStack(stack);
+                if (selectedNodeId) {
+                    const foundNode = findNodeById(state.DISPLAY_TREE, selectedNodeId);
+                    chosenName = foundNode?.component?.name || name;
+                    dbg.push(`[Inspector] ✓ Stack match: "${chosenName}" at ${selectedNodeId}`);
+                }
             }
 
-            if (selectedNodeId && fiber) {
-                const treeNode = getNodeByPath(state.DISPLAY_TREE, selectedNodeId);
-                if (treeNode?.instances?.length > 1) {
-                    const instIdx = findInstanceIndexForFiber(treeNode, fiber);
-                    if (instIdx >= 0) {
-                        if (!state.expandedInstanceGroups.has(selectedNodeId)) {
-                            state.expandedInstanceGroups.add(selectedNodeId);
-                        }
-                        state.selectedInstanceByGroup.set(selectedNodeId, instIdx);
-                        renderPanel();
+            if (!selectedNodeId) {
+                for (let i = 1; i < stack.length; i++) {
+                    const subStack = stack.slice(i);
+                    selectedNodeId = selectTreeNodeByStack(subStack);
+                    if (selectedNodeId) {
+                        const foundNode = findNodeById(state.DISPLAY_TREE, selectedNodeId);
+                        chosenName = foundNode?.component?.name || stack[i];
+                        dbg.push(`[Inspector] ✓ Sub-stack match at offset ${i}: "${chosenName}" at ${selectedNodeId}`);
+                        break;
+                    }
+                }
+            }
 
-                        const instId = selectedNodeId + ':' + instIdx;
-                        const instRow = state.shadow?.querySelector('.instance-row[data-instance-id="' + instId + '"]');
-                        if (instRow) {
-                            state.shadow!.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
-                            instRow.classList.add('selected');
-                            instRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Server component matching via _debugInfo (React dev mode)
+            if (!selectedNodeId) {
+                const rawFiber = getReactFiber(e.target);
+                const debugInfoArr = rawFiber?._debugInfo;
+                if (Array.isArray(debugInfoArr)) {
+                    // Extract server component stack from _debugInfo
+                    const serverStack: string[] = [];
+                    for (const entry of debugInfoArr) {
+                        if (entry.name && entry.env === 'Server') {
+                            serverStack.push(entry.name);
+                            // Walk the owner chain for ancestry
+                            let owner = entry.owner;
+                            const seenOwners = new Set();
+                            while (owner && serverStack.length < 15) {
+                                if (seenOwners.has(owner)) break;
+                                seenOwners.add(owner);
+                                if (owner.name && owner.env === 'Server') {
+                                    serverStack.push(owner.name);
+                                }
+                                owner = owner.owner;
+                            }
+                            break; // Use first server component entry
+                        }
+                    }
+
+                    if (serverStack.length > 0) {
+                        dbg.push(`[Inspector] Server component stack: [${serverStack.join(' → ')}]`);
+                        // Try ancestry matching with server stack
+                        selectedNodeId = selectTreeNodeByStack(serverStack);
+                        if (selectedNodeId) {
+                            const foundNode = findNodeById(state.DISPLAY_TREE, selectedNodeId);
+                            chosenName = foundNode?.component?.name || serverStack[0];
+                            dbg.push(`[Inspector] ✓ Server _debugInfo match: "${chosenName}" at ${selectedNodeId}`);
                         }
                     }
                 }
             }
 
+            // Fallback: walk up DOM ancestors to find nearest component in tree
+            if (!selectedNodeId) {
+                let ancestor: Element | null = (e.target as Element)?.parentElement;
+                const triedFibers = new Set<any>();
+                triedFibers.add(fiber);
+                while (ancestor && !selectedNodeId) {
+                    if (isOverlayElement(ancestor)) break;
+                    const ancFiber = getFiberFromElement(ancestor);
+                    if (ancFiber && !triedFibers.has(ancFiber)) {
+                        triedFibers.add(ancFiber);
+                        const ancId = findNodeIdForFiber(state.DISPLAY_TREE, ancFiber);
+                        if (ancId) {
+                            const ancNode = findNodeById(state.DISPLAY_TREE, ancId);
+                            const ancName = ancNode?.component?.name;
+                            if (ancName) {
+                                selectTreeNodeById(ancId);
+                                selectedNodeId = ancId;
+                                chosenName = ancName;
+                                dbg.push(`[Inspector] ✓ DOM ancestor fallback: "${ancName}" at ${ancId}`);
+                            }
+                        }
+                    }
+                    ancestor = ancestor.parentElement;
+                }
+            }
+
+            // Last resort: use the fiber ancestry match (wrong name but valid tree node)
+            if (!selectedNodeId && fiberAncestorMatch) {
+                selectedNodeId = fiberAncestorMatch.nodeId;
+                chosenName = fiberAncestorMatch.name;
+                selectTreeNodeById(selectedNodeId);
+                dbg.push(`[Inspector] ✓ Fiber ancestor fallback: "${chosenName}" at ${selectedNodeId}`);
+            }
+
+            if (!selectedNodeId) {
+                dbg.push(`[Inspector] ✗ NO MATCH FOUND`);
+            }
+
+            state.selectedFiber = fiber;
+            state.selectedElement = domEl;
+
+            dbg.push(`[Inspector] Final: chosenName="${chosenName || name}", nodeId="${selectedNodeId}"`);
+            console.log(dbg.join('\n'));
+
             showSelectedHighlight(domEl, chosenName || name);
+        } else {
+            const el = e.target as any;
+            const tag = el?.tagName?.toLowerCase() || '?';
+            const reactKeys = Object.getOwnPropertyNames(el).filter(k => k.startsWith('__react') || k.startsWith('_react'));
+            const rawFiber = reactKeys.length > 0 ? el[reactKeys[0]] : null;
+            const rawFiberType = rawFiber?.type;
+            const rawFiberName = typeof rawFiberType === 'string' ? rawFiberType
+                : typeof rawFiberType === 'function' ? (rawFiberType.displayName || rawFiberType.name || 'fn')
+                : rawFiberType?.displayName || rawFiberType?.render?.name || null;
+            console.log(
+                `[Inspector] No named component for <${tag}>\n` +
+                `  React keys on element: [${reactKeys.join(', ')}]\n` +
+                `  Raw fiber found: ${!!rawFiber}, type: ${rawFiberName || 'none'}\n` +
+                `  getFiberFromElement returned: ${fiber ? 'fiber' : 'null'}, name: "${name}"\n` +
+                `  Hint: if no React keys → React root not found or different key prefix`
+            );
         }
     };
 
@@ -184,24 +296,54 @@ export function mount(initialData?: any) {
         }
     }
     
-    // Start loop to find tree
+    let fiberTreeFound = false;
     function waitForFiberTree(attempts = 0) {
+      if (fiberTreeFound) return;
       refreshFiberTree();
-      if (state.FIBER_TREE.length === 0 && attempts < 20) {
-        setTimeout(() => waitForFiberTree(attempts + 1), 250);
-      } else {
+      if (state.FIBER_TREE.length > 0) {
+        fiberTreeFound = true;
+        console.log(`[Overlay] Fiber tree found on attempt ${attempts}`);
         ensureDomMounted();
         renderPanel();
+        return;
+      }
+      const delay = Math.min(attempts < 5 ? 200 : attempts < 15 ? 500 : 2000, 5000);
+      setTimeout(() => waitForFiberTree(attempts + 1), delay);
+    }
+
+    function hookIntoReactDevTools() {
+      const hook = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+      if (!hook) return;
+      const origInject = hook.inject;
+      if (typeof origInject === 'function') {
+        hook.inject = function(...args: any[]) {
+          const result = origInject.apply(this, args);
+          setTimeout(() => {
+            if (!fiberTreeFound) waitForFiberTree(0);
+          }, 500);
+          return result;
+        };
+      }
+      const origOnCommit = hook.onCommitFiberRoot;
+      if (typeof origOnCommit === 'function') {
+        hook.onCommitFiberRoot = function(rendererID: any, root: any, ...rest: any[]) {
+          if (!fiberTreeFound && root?.current?.child) {
+            setTimeout(() => {
+              if (!fiberTreeFound) waitForFiberTree(0);
+            }, 100);
+          }
+          return origOnCommit.call(this, rendererID, root, ...rest);
+        };
       }
     }
+
+    hookIntoReactDevTools();
     
     if (state.STATIC_TREE && state.STATIC_TREE.length > 0) {
         state.isLoading = false;
         buildStaticComponentMap(state.STATIC_TREE);
         ensureDomMounted();
         setTimeout(() => { if (!state.isOpen) toggle(); }, 100);
-        
-        // Also need to get Fiber tree to show fiber-specific info and stats
         setTimeout(() => waitForFiberTree(), 100);
     } else {
         refreshAnalysis();

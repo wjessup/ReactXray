@@ -704,15 +704,26 @@ function buildComponentTree(
     return jsxUsage.directChildren;
   }
 
-  function getAllProjectComponentsFromFile(file: string): string[] {
-    const jsxUsage = jsxUsageMap.get(file);
-    if (!jsxUsage) return [];
+  interface FileComponentUsage {
+    names: string[];
+    effectiveCounts: Map<string, number>;
+    effectiveLines: Map<string, number[]>;
+  }
 
+  function getAllProjectComponentsFromFile(file: string): FileComponentUsage {
+    const jsxUsage = jsxUsageMap.get(file);
+    if (!jsxUsage) return { names: [], effectiveCounts: new Map(), effectiveLines: new Map() };
+
+    const effectiveCounts = new Map<string, number>();
+    const effectiveLines = new Map<string, number[]>();
     const allComponents = new Set<string>();
 
     for (const name of jsxUsage.directChildren) {
       if (nameToFileMap.has(name)) {
         allComponents.add(name);
+        effectiveCounts.set(name, jsxUsage.directChildrenCounts.get(name) || 1);
+        const lines = jsxUsage.directChildrenLines.get(name);
+        if (lines) effectiveLines.set(name, [...lines]);
       }
     }
 
@@ -721,19 +732,26 @@ function buildComponentTree(
     // Only walk non-project parents reachable from directChildren through non-project chains.
     // Do NOT walk non-project parents that are nested under a project parent
     // (those are handled by the passedAsChildren expansion).
-    const collected = new Set<string>(allComponents);
+    const visited = new Set<string>();
 
     function collectFromNonProjectParent(parentName: string) {
+      if (visited.has(parentName)) return;
+      visited.add(parentName);
       const nested = jsxUsage!.nestedInComponent.get(parentName);
       if (!nested) return;
+      const parentCounts = jsxUsage!.nestedChildrenCounts.get(parentName);
+      const parentLines = jsxUsage!.nestedChildrenLines.get(parentName);
       for (const childName of nested) {
         if (nameToFileMap.has(childName)) {
-          if (!collected.has(childName)) {
-            allComponents.add(childName);
-            collected.add(childName);
+          allComponents.add(childName);
+          const nestedCount = parentCounts?.get(childName) || 1;
+          effectiveCounts.set(childName, (effectiveCounts.get(childName) || 0) + nestedCount);
+          const nestedLines = parentLines?.get(childName);
+          if (nestedLines) {
+            if (!effectiveLines.has(childName)) effectiveLines.set(childName, []);
+            effectiveLines.get(childName)!.push(...nestedLines);
           }
         } else {
-          // Recurse through non-project wrapper components
           collectFromNonProjectParent(childName);
         }
       }
@@ -746,7 +764,7 @@ function buildComponentTree(
       }
     }
 
-    return Array.from(allComponents);
+    return { names: Array.from(allComponents), effectiveCounts, effectiveLines };
   }
 
   function getInferredChildrenForComponent(
@@ -871,15 +889,20 @@ function buildComponentTree(
       }
     }
 
-    const allProjectComponents = getAllProjectComponentsFromFile(file);
+    const { names: allProjectComponents, effectiveCounts, effectiveLines } = getAllProjectComponentsFromFile(file);
     for (const childName of allProjectComponents) {
-      const alreadyAdded = children.some(
-        (c) => c.component?.name === childName || c.file.includes(childName),
-      );
-      if (alreadyAdded) continue;
+      const existingCount = children.filter(
+        (c) => c.component?.name === childName,
+      ).length;
+      const targetCount = effectiveCounts.get(childName) || 1;
+      const remaining = Math.max(0, targetCount - existingCount);
+      if (remaining === 0) continue;
 
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !isCircular(childName, childFile, currentPath)) {
+      if (!childFile || isCircular(childName, childFile, currentPath)) continue;
+
+      const usageLines = effectiveLines.get(childName) || [];
+      for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
           fileJsxUsage || null,
@@ -890,6 +913,10 @@ function buildComponentTree(
         const condition = getRenderCondition(file, null, childName);
         if (condition) {
           childNode.renderCondition = condition;
+        }
+
+        if (usageLines[existingCount + n]) {
+          childNode.usageLine = usageLines[existingCount + n];
         }
 
         children.push(childNode);
@@ -960,15 +987,20 @@ function buildComponentTree(
       }
     }
 
-    const allProjectComponents = getAllProjectComponentsFromFile(file);
-    for (const childName of allProjectComponents) {
-      const alreadyAdded = children.some(
-        (c) => c.component?.name === childName || c.file.includes(childName),
-      );
-      if (alreadyAdded) continue;
+    const { names: allProjectComponents2, effectiveCounts: ec2, effectiveLines: el2 } = getAllProjectComponentsFromFile(file);
+    for (const childName of allProjectComponents2) {
+      const existingCount = children.filter(
+        (c) => c.component?.name === childName,
+      ).length;
+      const targetCount = ec2.get(childName) || 1;
+      const remaining = Math.max(0, targetCount - existingCount);
+      if (remaining === 0) continue;
 
       const childFile = nameToFileMap.get(childName);
-      if (childFile && !isCircular(childName, childFile, currentPath)) {
+      if (!childFile || isCircular(childName, childFile, currentPath)) continue;
+
+      const usageLines = el2.get(childName) || [];
+      for (let n = 0; n < remaining; n++) {
         const childNode = buildFromFile(
           childFile,
           fileJsxUsage || null,
@@ -979,6 +1011,10 @@ function buildComponentTree(
         const condition = getRenderCondition(file, null, childName);
         if (condition) {
           childNode.renderCondition = condition;
+        }
+
+        if (usageLines[existingCount + n]) {
+          childNode.usageLine = usageLines[existingCount + n];
         }
 
         children.push(childNode);

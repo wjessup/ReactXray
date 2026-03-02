@@ -166,6 +166,7 @@ function startProxyServer(
               allComponents: result.allComponents,
               stats: result.stats,
               architectureAnalysis: result.architectureAnalysis,
+              projectPath: projectPath || '',
             })
           );
           console.log(
@@ -243,8 +244,9 @@ function startProxyServer(
           return;
         }
         
-        const normalizedPath = filePath.startsWith("/") ? filePath : path.join(projectPath, filePath);
-        if (!normalizedPath.startsWith(projectPath)) {
+        const isAbsolute = filePath.startsWith("/") || /^[A-Z]:[/\\]/i.test(filePath);
+        const normalizedPath = path.resolve(isAbsolute ? filePath : path.join(projectPath, filePath));
+        if (!normalizedPath.toLowerCase().startsWith(path.resolve(projectPath).toLowerCase())) {
           res.statusCode = 403;
           res.end(JSON.stringify({ error: "Access denied" }));
           return;
@@ -260,6 +262,110 @@ function startProxyServer(
           res.statusCode = 404;
           res.end(JSON.stringify({ error: "File not found", path: normalizedPath }));
         }
+        return;
+      }
+
+      if (req.url?.startsWith("/__ai_chat") && req.method === "POST") {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", async () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+            const message: string = body.message || "";
+            const context: Array<{ name: string; file: string; line: number; ancestry?: string[]; usageFile?: string; usageLine?: number }> = body.context || [];
+
+            const SNIPPET_RADIUS = 5;
+            const cursorLinks: string[] = [];
+
+            function resolvePath(file: string): string {
+              return file.startsWith("/") || file.startsWith("\\") || /^[A-Z]:\\/i.test(file)
+                ? file
+                : projectPath
+                  ? path.join(projectPath, file)
+                  : file;
+            }
+
+            async function readSnippet(filePath: string, line: number): Promise<string> {
+              try {
+                const content = await fs.readFile(filePath, "utf-8");
+                const lines = content.split("\n");
+                const start = Math.max(0, line - SNIPPET_RADIUS - 1);
+                const end = Math.min(lines.length, line + SNIPPET_RADIUS);
+                return lines.slice(start, end).join("\n");
+              } catch {
+                return "// Could not read file";
+              }
+            }
+
+            const ext = (p: string) => p.split(".").pop() || "tsx";
+            let prompt = "## Task\n" + message + "\n\n";
+            prompt += "## Important\n";
+            prompt += "- When the task targets a specific instance of a component, make changes at the **Usage site** (the parent file where the component is rendered), NOT at the component definition.\n";
+            prompt += "- Only modify the **Component definition** if the change should apply to ALL instances of that component.\n";
+            prompt += "- Prefer passing props at the usage site over modifying the component internals.\n\n";
+            prompt += "## Components\n";
+
+            for (const ctx of context) {
+              const defPath = resolvePath(ctx.file);
+              const defShort = projectPath ? path.relative(projectPath, defPath) : defPath;
+              const ancestryLabel = (ctx.ancestry || []).length > 0 ? (ctx.ancestry || []).join(" > ") + " > " + ctx.name : ctx.name;
+              const defLink = "cursor://file/" + defPath + ":" + ctx.line;
+              cursorLinks.push(defLink);
+
+              prompt += "\n### " + ancestryLabel + " (" + defShort + ")\n";
+
+              if (ctx.usageFile) {
+                const usagePath = resolvePath(ctx.usageFile);
+                let usageLine = ctx.usageLine || 0;
+
+                if (!usageLine) {
+                  try {
+                    const parentContent = await fs.readFile(usagePath, "utf-8");
+                    const parentLines = parentContent.split("\n");
+                    const tagPattern = new RegExp("<" + ctx.name + "[\\s/>]");
+                    for (let li = 0; li < parentLines.length; li++) {
+                      if (tagPattern.test(parentLines[li])) {
+                        usageLine = li + 1;
+                        break;
+                      }
+                    }
+                  } catch {}
+                }
+
+                if (usageLine) {
+                  const usageShort = projectPath ? path.relative(projectPath, usagePath) : usagePath;
+                  const usageSnippet = await readSnippet(usagePath, usageLine);
+                  const usageLink = "cursor://file/" + usagePath + ":" + usageLine;
+                  cursorLinks.push(usageLink);
+                  prompt += "\n**Usage site (EDIT HERE for instance-specific changes):** `" + usageShort + ":" + usageLine + "`\n";
+                  prompt += usageLink + "\n";
+                  prompt += "```" + ext(usagePath) + "\n" + usageSnippet + "\n```\n";
+                }
+              }
+
+              const defSnippet = await readSnippet(defPath, ctx.line);
+              prompt += "\n**Component definition (reference, edit only for global changes):** `" + defShort + ":" + ctx.line + "`\n";
+              prompt += defLink + "\n";
+              prompt += "```" + ext(defPath) + "\n" + defSnippet + "\n```\n";
+            }
+
+            res.setHeader("Content-Type", "application/json");
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.end(JSON.stringify({ prompt, cursorLinks }));
+          } catch (err) {
+            res.statusCode = 500;
+            res.setHeader("Access-Control-Allow-Origin", "*");
+            res.end(JSON.stringify({ error: (err as Error).message }));
+          }
+        });
+        return;
+      }
+
+      if (req.url?.startsWith("/__ai_chat") && req.method === "OPTIONS") {
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        res.end();
         return;
       }
 

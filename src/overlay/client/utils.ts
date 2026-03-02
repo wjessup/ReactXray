@@ -2,9 +2,19 @@ import { state } from './state';
 
 export const OVERLAY_ID = 'react-xray-overlay-root';
 
+export function resolveFilePath(relativePath: string): string {
+    if (!relativePath) return relativePath;
+    if (/^[A-Z]:\\/i.test(relativePath) || relativePath.startsWith('/')) return relativePath;
+    if (!state.PROJECT_PATH) return relativePath;
+    const sep = state.PROJECT_PATH.includes('\\') ? '\\' : '/';
+    const base = state.PROJECT_PATH.endsWith(sep) ? state.PROJECT_PATH : state.PROJECT_PATH + sep;
+    return base + relativePath.replace(/\//g, sep);
+}
+
 export function getDomFromFiber(fiber: any): any {
     if (!fiber) return null;
-    if (fiber.stateNode instanceof Element) return fiber.stateNode;
+    const activeFiber = fiber.alternate && fiber.alternate.child && !fiber.child ? fiber.alternate : fiber;
+    if (activeFiber.stateNode instanceof Element) return activeFiber.stateNode;
 
     const elements: Element[] = [];
     function collectElements(f: any, depth = 0) {
@@ -19,7 +29,7 @@ export function getDomFromFiber(fiber: any): any {
             child = child.sibling;
         }
     }
-    collectElements(fiber);
+    collectElements(activeFiber);
 
     if (elements.length === 0) return null;
     if (elements.length === 1) return elements[0];
@@ -44,13 +54,67 @@ export function getDomFromFiber(fiber: any): any {
     };
 }
 
+let _reactFiberKey: string | null = null;
+let _reactFiberKeySearched = false;
+
+export function resetFiberKeyCache() {
+    _reactFiberKey = null;
+    _reactFiberKeySearched = false;
+}
+
+function getOwnReactKeys(el: any): string[] {
+    const result: string[] = [];
+    for (const k of Object.getOwnPropertyNames(el)) {
+        if (k.startsWith('__react') || k.startsWith('_react')) result.push(k);
+    }
+    return result;
+}
+
+function findReactFiberKey(): string | null {
+    if (_reactFiberKeySearched) return _reactFiberKey;
+    _reactFiberKeySearched = true;
+    const testElements = [
+        document.getElementById('__next'),
+        document.getElementById('root'),
+        document.getElementById('app'),
+        document.querySelector('div'),
+        document.querySelector('main'),
+        document.querySelector('span'),
+        document.querySelector('a'),
+        document.body?.firstElementChild,
+    ];
+    for (const el of testElements) {
+        if (!el) continue;
+        for (const k of getOwnReactKeys(el)) {
+            if (k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')) {
+                _reactFiberKey = k;
+                return k;
+            }
+        }
+    }
+    return null;
+}
+
 export function getReactFiber(el: any): any {
-    const keys = Object.keys(el);
-    const fiberKey = keys.find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-    return fiberKey ? el[fiberKey] : null;
+    if (!el) return null;
+    const cachedKey = _reactFiberKey || findReactFiberKey();
+    if (cachedKey && el[cachedKey]) return el[cachedKey];
+    for (const k of getOwnReactKeys(el)) {
+        if (k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')) {
+            _reactFiberKey = k;
+            return el[k];
+        }
+    }
+    return null;
 }
 
 export function getFiberFromElement(el: any): any {
+    let target: any = el;
+    while (target && target instanceof Element) {
+        const mapped = state.elementToFiberMap.get(target);
+        if (mapped) return mapped;
+        target = target.parentElement;
+    }
     const fiber = getReactFiber(el);
     if (!fiber) return null;
     let current = fiber;
@@ -96,7 +160,6 @@ export function isOverlayElement(el: any): boolean {
 }
 
 export function findReactRoot(): any {
-    // Try specific known IDs first, then scan body children, then fallback to body/html
     const specificCandidates = [
         document.getElementById('root'),
         document.getElementById('__next'),
@@ -104,7 +167,6 @@ export function findReactRoot(): any {
         document.getElementById('__app'),
     ].filter(Boolean) as HTMLElement[];
 
-    // Also scan direct children of body for any React root
     const bodyChildren: HTMLElement[] = [];
     if (document.body) {
         for (let i = 0; i < document.body.children.length; i++) {
@@ -123,29 +185,58 @@ export function findReactRoot(): any {
         if (result) return result;
     }
 
-    // Fallback: try React DevTools global hook
     const hook = (window as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
     if (hook) {
-        // React DevTools hook stores fiber roots in a Map
         const fiberRoots = hook._fiberRoots || hook.fiberRoots;
         if (fiberRoots && fiberRoots.size > 0) {
             const firstRoot = fiberRoots.values().next().value;
             if (firstRoot?.current) return firstRoot;
         }
 
-        // Also check renderers for roots
         if (hook.renderers) {
             for (const [, renderer] of hook.renderers) {
                 if (renderer?.findFiberByHostInstance) {
-                    // Try to get fiber from known root elements
-                    for (const el of specificCandidates) {
-                        const fiber = renderer.findFiberByHostInstance(el);
-                        if (fiber) {
-                            let root = fiber;
-                            while (root.return) root = root.return;
-                            return { current: root };
-                        }
+                    for (const el of [...specificCandidates, ...bodyChildren]) {
+                        try {
+                            const fiber = renderer.findFiberByHostInstance(el);
+                            if (fiber) {
+                                let root = fiber;
+                                while (root.return) root = root.return;
+                                if (root.stateNode?.current) return root.stateNode;
+                                return { current: root };
+                            }
+                        } catch {}
                     }
+                }
+            }
+        }
+
+        if (hook.onCommitFiberRoot) {
+            for (const [, rendererInterface] of (hook.renderers || new Map())) {
+                if (rendererInterface?.getFiberRoots) {
+                    try {
+                        const roots = rendererInterface.getFiberRoots(1);
+                        if (roots && roots.size > 0) {
+                            const firstRoot = roots.values().next().value;
+                            if (firstRoot?.current) return firstRoot;
+                        }
+                    } catch {}
+                }
+            }
+        }
+    }
+
+    for (const el of allCandidates) {
+        for (const k of getOwnReactKeys(el)) {
+            if (k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance') || k.startsWith('__reactContainer') || k.startsWith('_reactRootContainer')) {
+                const val = (el as any)[k];
+                if (val?.current) return val;
+                if (val?._internalRoot?.current) return val._internalRoot;
+                if (val && typeof val === 'object' && val.tag !== undefined) {
+                    let fiber = val;
+                    while (fiber.return) fiber = fiber.return;
+                    if (fiber.stateNode?.current) return fiber.stateNode;
+                    return { current: fiber };
                 }
             }
         }
@@ -154,10 +245,13 @@ export function findReactRoot(): any {
     return null;
 }
 
-function findRootFromElement(el: HTMLElement): any {
-    const keys = Object.keys(el);
+function getElementKeys(el: any): string[] {
+    return getOwnReactKeys(el);
+}
 
-    // Check for React 18 createRoot container key
+function findRootFromElement(el: HTMLElement): any {
+    const keys = getElementKeys(el);
+
     const containerKey = keys.find(k =>
         k.startsWith('__reactContainer$') || k.startsWith('_reactRootContainer')
     );
@@ -300,6 +394,20 @@ export function findElementsByComponentName(name: string): Element[] {
     return results;
 }
 
+export function getAncestryNames(displayTree: any[], nodeId: string): string[] {
+    const parts = nodeId.split('-').map(Number);
+    const names: string[] = [];
+    let current = displayTree;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const node = current[parts[i]];
+        if (!node) break;
+        const name = node.component?.name;
+        if (name) names.push(name);
+        current = node.children || [];
+    }
+    return names;
+}
+
 export function getParentName(displayTree: any[], nodeId: string): string | null {
     const parts = nodeId.split('-').map(Number);
     if (parts.length < 2) return null;
@@ -308,6 +416,19 @@ export function getParentName(displayTree: any[], nodeId: string): string | null
         const node = current[parts[i]];
         if (!node) return null;
         if (i === parts.length - 2) return node.component?.name || null;
+        current = node.children || [];
+    }
+    return null;
+}
+
+export function getParentNode(displayTree: any[], nodeId: string): any | null {
+    const parts = nodeId.split('-').map(Number);
+    if (parts.length < 2) return null;
+    let current = displayTree;
+    for (let i = 0; i < parts.length - 1; i++) {
+        const node = current[parts[i]];
+        if (!node) return null;
+        if (i === parts.length - 2) return node;
         current = node.children || [];
     }
     return null;
@@ -367,28 +488,82 @@ export function findBestMatchingElement(displayTree: any[], node: any, nodeId: s
     }
     const name = node.component.name;
     const allMatches = findElementsByComponentName(name);
-    if (allMatches.length === 0) return null;
     if (allMatches.length === 1) return allMatches[0];
+    if (allMatches.length > 1) {
+        const parentName = getParentName(displayTree, nodeId);
+        const sibIdx = getSiblingIndex(displayTree, nodeId);
 
-    const parentName = getParentName(displayTree, nodeId);
-    const sibIdx = getSiblingIndex(displayTree, nodeId);
+        for (const el of allMatches) {
+            if (getFiberParentName(el) === parentName && getFiberSiblingIndex(el, name) === sibIdx) {
+                return el;
+            }
+        }
+        for (const el of allMatches) {
+            if (getFiberParentName(el) === parentName) return el;
+        }
+        return allMatches[0];
+    }
 
-    for (const el of allMatches) {
-        if (getFiberParentName(el) === parentName && getFiberSiblingIndex(el, name) === sibIdx) {
-            return el;
+    // Server-only fallback: walk up tree to find nearest ancestor with a fiber/DOM
+    if (node.isServerOnly && nodeId) {
+        const parts = nodeId.split('-').map(Number);
+        while (parts.length > 0) {
+            parts.pop();
+            const parentId = parts.length > 0 ? parts.join('-') : '0';
+            const parentNode = findNodeById(displayTree, parentId);
+            if (parentNode?.fiber) {
+                const parentDom = getDomFromFiber(parentNode.fiber);
+                if (parentDom) return parentDom;
+            }
+            if (parts.length <= 1) break;
         }
     }
-    for (const el of allMatches) {
-        if (getFiberParentName(el) === parentName) return el;
-    }
-    return allMatches[0];
+    return null;
+}
+
+let _displayNamesCache: Set<string> | null = null;
+let _displayNamesCacheRef: any[] | null = null;
+
+function getDisplayNames(nodes: any[]): Set<string> {
+    if (_displayNamesCacheRef === nodes && _displayNamesCache) return _displayNamesCache;
+    const names = new Set<string>();
+    const walk = (arr: any[]) => {
+        for (const n of arr) {
+            if (n.component?.name) names.add(n.component.name);
+            if (n.children?.length) walk(n.children);
+        }
+    };
+    walk(nodes);
+    _displayNamesCache = names;
+    _displayNamesCacheRef = nodes;
+    return names;
+}
+
+export function invalidateDisplayNamesCache() {
+    _displayNamesCache = null;
+    _displayNamesCacheRef = null;
 }
 
 export function findNodeByAncestry(nodes: any[], stack: string[], prefix: string, currentPath: string[]): any {
     if (stack.length === 0) return null;
-    const targetName = stack[0];
-    const parentNames = stack.slice(1);
 
+    const displayNames = getDisplayNames(nodes);
+    const filteredStack = stack.filter(n => displayNames.has(n));
+    if (filteredStack.length === 0) return null;
+
+    const targetName = filteredStack[0];
+    const parentNames = filteredStack.slice(1);
+
+    return _findNodeByAncestryInner(nodes, targetName, parentNames, prefix, []);
+}
+
+function _findNodeByAncestryInner(
+    nodes: any[],
+    targetName: string,
+    parentNames: string[],
+    prefix: string,
+    currentPath: string[],
+): any {
     let bestMatch: any = null;
     let bestScore = -1;
 
@@ -401,7 +576,8 @@ export function findNodeByAncestry(nodes: any[], stack: string[], prefix: string
             let score = 0;
             const pathRev = [...currentPath].reverse();
             for (let j = 0; j < Math.min(parentNames.length, pathRev.length); j++) {
-                if (parentNames[j] === pathRev[j]) score += 10 - j;
+                if (parentNames[j] === pathRev[j]) score += (parentNames.length - j) * 2;
+                else break;
             }
             if (score > bestScore || (score === bestScore && !bestMatch)) {
                 bestScore = score;
@@ -410,7 +586,7 @@ export function findNodeByAncestry(nodes: any[], stack: string[], prefix: string
         }
 
         if (nodes[i].children?.length) {
-            const childResult = findNodeByAncestry(nodes[i].children, stack, nodeId, newPath);
+            const childResult = _findNodeByAncestryInner(nodes[i].children, targetName, parentNames, nodeId, newPath);
             if (childResult && childResult.score > bestScore) {
                 bestScore = childResult.score;
                 bestMatch = childResult;

@@ -1,6 +1,6 @@
-import { state } from './state';
-import { getStaticComponent } from './logic';
-import { escapeHtml, hasAnyFiberDescendant, h } from './utils';
+import { state } from './state.js';
+import { getStaticComponent } from './logic.js';
+import { escapeHtml, hasAnyFiberDescendant, h, getParentNode, resolveFilePath } from './utils.js';
 
 export function nodeMatchesSearch(node: any, term: string): boolean {
     if (!term) return true;
@@ -60,15 +60,17 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
         const matches = nodeMatchesSearch(node, state.searchTerm);
         const hasSource = rawFile !== 'unknown';
 
+        const definedFile = comp?.filePath || '';
+        const parentNode = getParentNode(state.DISPLAY_TREE, nodeId);
+        const parentFile = parentNode?.component?.filePath || parentNode?.file || '';
+        const usageLine = node.usageLine || node.source?.lineNumber || 0;
+        const hasUsageSite = parentFile && parentFile !== definedFile;
+        const hasDefinition = definedFile && definedFile !== 'unknown';
+
         const staticComp = name !== '—' ? getStaticComponent(name) : null;
         const isServerOnly = node.isServerOnly;
         const isBridge = node.isBridge;
         const hasFiber = node.hasFiber;
-
-        const instanceCount = node.instances?.length || 0;
-        const hasInstances = instanceCount > 1;
-        const isExpanded = state.expandedInstanceGroups.has(nodeId);
-        const selectedIdx = state.selectedInstanceByGroup.get(nodeId) ?? -1;
 
         const badges = [];
 
@@ -97,11 +99,6 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             badges.push('<span class="badge client inherited" title="RUNS ON CLIENT (inherited, dashed blue)&#10;&#10;This file has NO \'use client\' directive, but runs on the client anyway!&#10;&#10;A parent component with \'use client\' imports this file.">↳ client</span>');
         } else if (!staticComp?.isClientComponent && staticComp && !hasFiber) {
             badges.push('<span class="badge server" title="SERVER COMPONENT (green)&#10;&#10;This component renders on the server.">SERVER</span>');
-        }
-
-        if (hasInstances) {
-            const instanceBadge = '<span class="badge instance-count" data-group="' + nodeId + '" title="' + instanceCount + ' instances of this component. Click to ' + (isExpanded ? 'collapse' : 'expand') + '.">(x' + instanceCount + ')</span>';
-            badges.push(instanceBadge);
         }
 
         if (node.renderCondition) {
@@ -137,38 +134,25 @@ export function renderTree(nodes: any[], depth = 0, prefix = ''): string {
             ? '<span class="render-count server-only" title="Server-rendered">—</span>'
             : '<span class="render-count" style="' + (renderCount === 0 ? 'opacity:0.3' : '') + '">' + renderCount + '</span>';
 
-        let instanceRowsHtml = '';
-        if (hasInstances && isExpanded) {
-            const maxToShow = Math.min(instanceCount, 200);
-            let rows = '';
-            for (let idx = 0; idx < maxToShow; idx++) {
-                const instId = nodeId + ':' + idx;
-                const isSelected = idx === selectedIdx;
-                rows += '<div class="instance-row' + (isSelected ? ' selected' : '') + '" data-instance-id="' + instId + '" data-group="' + nodeId + '" data-idx="' + idx + '"><span class="instance-label">' + name + ' (' + (idx + 1) + '/' + instanceCount + ')</span></div>';
-            }
-            if (instanceCount > 200) {
-                rows += '<div class="instance-row capped">...and ' + (instanceCount - 200) + ' more</div>';
-            }
-            instanceRowsHtml = '<div class="instance-list">' + rows + '</div>';
-        }
-
         const nodeClasses = ['node', matches ? '' : 'hidden', isServerOnly ? 'server-only' : '', isBridge ? 'bridge' : ''].filter(Boolean).join(' ');
         const childrenHtml = hasChildren ? '<div class="children">' + renderTree(node.children, depth + 1, nodeId) + '</div>' : '';
 
         return `
         <div class="${nodeClasses}" data-depth="${depth}" data-name="${name}" data-file="${rawFile}" data-id="${nodeId}">
           <div class="node-header">
-            <span class="toggle">${hasChildren || hasInstances ? '▼' : '•'}</span>
+            <span class="toggle">${hasChildren ? '▼' : '•'}</span>
             <span class="name">${escapeHtml(name)}</span>
             ${badgesHtml}
             ${propsHtml}
             ${hooksHtml}
             ${dataFlowHtml}
             <span class="info-btn" title="View details">ℹ</span>
+            <span class="ai-add-btn" title="Add to AI context">+✨</span>
+            ${hasUsageSite ? '<span class="usage-btn" title="Used at: ' + escapeHtml((parentFile.split('/').pop() || parentFile).split('\\').pop() || parentFile) + (usageLine ? ':' + usageLine : '') + '" data-usage-file="' + escapeHtml(resolveFilePath(parentFile)) + '" data-usage-line="' + usageLine + '">📍</span>' : ''}
+            ${hasDefinition ? '<span class="file-btn" title="Open: ' + escapeHtml((definedFile.split('/').pop() || definedFile).split('\\').pop() || definedFile) + '" data-def-file="' + escapeHtml(resolveFilePath(definedFile)) + '">📂</span>' : ''}
             ${renderCountHtml}
             <span class="file ${hasSource ? 'has-source' : ''}" title="${escapeHtml(rawFile)}">${escapeHtml(fileDisplay)}</span>
           </div>
-          ${instanceRowsHtml}
           ${childrenHtml}
         </div>
       `;

@@ -88,6 +88,7 @@ export interface ComponentTreeNode {
   component: ComponentInfo | null;
   children: ComponentTreeNode[];
   renderCondition?: RenderCondition;
+  usageLine?: number;
 }
 
 export interface RouteEntryFiles {

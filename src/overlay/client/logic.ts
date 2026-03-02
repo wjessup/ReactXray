@@ -1,10 +1,11 @@
 import { state, callbacks } from './state';
-import { findReactRoot, getFiberName, extractSourceLocation, getDomFromFiber } from './utils';
+import { findReactRoot, getFiberName, extractSourceLocation, getDomFromFiber, resetFiberKeyCache, invalidateDisplayNamesCache } from './utils';
 import {
   buildFiberLookupByName,
   mergeStaticWithFiber,
   sortFiberLookupForMerge,
 } from '../runtime-logic.js';
+
 
 function buildFiberTree(fiber: any, depth = 0): any[] {
     if (!fiber || depth > 150) return [];
@@ -31,9 +32,34 @@ function buildFiberTree(fiber: any, depth = 0): any[] {
     return nodes;
 }
 
+
+function buildElementToFiberMap(fiber: any, map: WeakMap<Element, any>, parentNamedFiber: any = null) {
+    if (!fiber) return;
+    let current: any = fiber;
+    const seen = new Set();
+    while (current) {
+        if (seen.has(current)) break;
+        seen.add(current);
+        const name = getFiberName(current);
+        const isNamed = name && !/^[a-z]/.test(name) && name !== 'Fragment';
+        const activeFiber = isNamed ? current : parentNamedFiber;
+        if (current.stateNode instanceof Element && activeFiber) {
+            map.set(current.stateNode, activeFiber);
+        }
+        if (current.child) {
+            buildElementToFiberMap(current.child, map, activeFiber);
+        }
+        current = current.sibling;
+    }
+}
+
 function captureFullFiberTree() {
     const root = findReactRoot();
     if (!root?.current) return [];
+    if (!root.current.child) return [];
+    const map = new WeakMap<Element, any>();
+    buildElementToFiberMap(root.current.child, map);
+    state.elementToFiberMap = map;
     return buildFiberTree(root.current);
 }
 
@@ -65,7 +91,6 @@ export async function loadComponentAllowlist() {
         if (data.components && Array.isArray(data.components)) {
             componentAllowlist = new Set(data.components);
             allowlistLoaded = true;
-            console.log('[Overlay] Loaded ' + componentAllowlist.size + ' project components');
         }
     } catch (err) {
         console.warn('[Overlay] Failed to load component allowlist:', err);
@@ -166,8 +191,13 @@ function saveCalculatedTree() {
 }
 
 export function refreshFiberTree() {
+    resetFiberKeyCache();
     state.FIBER_TREE = captureFullFiberTree();
     state.isMinified = detectMinified(state.FIBER_TREE);
+
+    if (state.FIBER_TREE.length === 0) return;
+
+    invalidateDisplayNamesCache();
     const filtered = filterEnabled ? filterFiberTree(state.FIBER_TREE) : state.FIBER_TREE;
     annotateFiberPositions(filtered);
     const fiberLookup = buildFiberLookupByName(filtered);
@@ -177,22 +207,31 @@ export function refreshFiberTree() {
 
     const serverCount = countServerOnlyNodes(state.TREE);
     const clientCount = countClientNodes(state.TREE);
-    
-    // Count total actual components (excluding slots like {children})
-    function countValidComponents(nodes: any[]): number {
-        return nodes.reduce((acc, n) => {
-            const isComp = n.component ? 1 : 0;
-            return acc + isComp + countValidComponents(n.children || []);
-        }, 0);
-    }
-    
+
+    let totalComps = 0;
+    let matchedComps = 0;
+    const countNodes = (nodes: any[]) => {
+        for (const n of nodes) {
+            if (n.component) { totalComps++; if (n.hasFiber) matchedComps++; }
+            if (n.children) countNodes(n.children);
+        }
+    };
+    countNodes(state.TREE);
+
+    console.log(
+        `[Overlay] Components: ${matchedComps} matched / ${totalComps} static` +
+        ` | Fibers: ${fiberLookup.size} unique` +
+        ` | Server: ${serverCount}, Client: ${clientCount}`
+    );
+
     state.STATS = {
-        totalComponents: countValidComponents(state.TREE),
+        totalComponents: totalComps,
         serverComponents: serverCount,
         clientComponents: clientCount,
         fiberNodes: fiberLookup.size,
+        matchedComponents: matchedComps,
     };
-    
+
     if (!state.isLoading) {
         callbacks.render();
     }
@@ -223,6 +262,10 @@ export async function refreshAnalysis() {
             state.ARCHITECTURE = data.architectureAnalysis;
         }
 
+        if (data.projectPath) {
+            state.PROJECT_PATH = data.projectPath;
+        }
+
         state.ROUTE = window.location.pathname;
         lastAnalyzedRoute = state.ROUTE;
 
@@ -242,7 +285,9 @@ export async function refreshAnalysis() {
                 callbacks.render();
             });
 
-        refreshFiberTree();
+        if (state.FIBER_TREE.length > 0) {
+            refreshFiberTree();
+        }
     } catch (err) {
         console.warn('[Overlay] Failed to refresh analysis:', err);
     }

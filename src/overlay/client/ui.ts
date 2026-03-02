@@ -5,9 +5,12 @@ import {
     findFirstNodeWithName,
     findNodeByAncestry,
     findNodeById,
+    getAncestryNames,
     getDomFromFiber,
     getFiberName,
+    getParentNode,
     hasAnyFiberDescendant,
+    invalidateDisplayNamesCache,
     h,
 } from './utils';
 import { hideHoverHighlight, hideSelectedHighlight, showHoverHighlight, showSelectedHighlight } from './highlight';
@@ -16,6 +19,7 @@ import { getFilterEnabled, getStaticComponent, refreshAnalysis, toggle, toggleFi
 import { showSettingsDialog } from './settings';
 
 import { filterIgnoredNodes, renderTreeContainer } from './treeRenderer';
+import { renderAiSection, addComponentToAiContext } from './ai-chat';
 
 export function renderPanel() {
     if (!state.container) return;
@@ -25,6 +29,7 @@ export function renderPanel() {
     }
 
     state.DISPLAY_TREE = filterIgnoredNodes(state.TREE);
+    invalidateDisplayNamesCache();
     const filterLabel = getFilterEnabled() ? 'FILTERED' : 'ALL';
     const ignoredCount = state.ignoredPaths.filter((p: string) => p.trim()).length;
 
@@ -57,6 +62,7 @@ export function renderPanel() {
         <div class="search">
           <input type="text" placeholder="Search components..." value="${escapeHtml(state.searchTerm)}">
         </div>
+        <div class="ai-section"></div>
         <div class="tree-container">
           <div class="sticky-parents"></div>
           <div class="tree"></div>
@@ -71,6 +77,7 @@ export function renderPanel() {
     }
 
     state.container.style.setProperty('--panel-width', state.panelWidth + 'px');
+    renderAiSection();
     attachPanelEvents();
     attachNodeEvents();
 }
@@ -137,6 +144,7 @@ function attachPanelEvents() {
         const tree = state.shadow?.querySelector('.tree');
         if (tree) {
             state.DISPLAY_TREE = filterIgnoredNodes(state.TREE);
+            invalidateDisplayNamesCache();
             renderTreeContainer(tree as HTMLElement);
             attachNodeEvents();
         }
@@ -256,6 +264,10 @@ function attachNodeEvents() {
                 domEl = state.selectedElement || getDomFromFiber(state.selectedFiber);
             }
 
+            if (!domEl && treeNode) {
+                domEl = findBestMatchingElement(state.DISPLAY_TREE, treeNode, nodeId);
+            }
+
             const isRealNode = domEl instanceof Node;
             const isInDocument = isRealNode ? document.contains(domEl) : (domEl?._elements?.some((el: Element) => document.contains(el)) ?? false);
 
@@ -281,41 +293,10 @@ function attachNodeEvents() {
             const target = e.target as HTMLElement;
 
             if (target.classList.contains('toggle')) {
-                const nodeId = (node as HTMLElement).dataset.id!;
-                const hasInstanceList = node!.querySelector('.instance-list');
                 const hasChildrenEl = node!.querySelector('.children');
-                if (hasInstanceList || hasChildrenEl) {
-                    if (state.expandedInstanceGroups.has(nodeId)) {
-                        state.expandedInstanceGroups.delete(nodeId);
-                    }
+                if (hasChildrenEl) {
                     node!.classList.toggle('collapsed');
-                    if (!node!.classList.contains('collapsed') && !hasInstanceList) {
-                        const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
-                        if (treeNode?.instances?.length > 1) {
-                            state.expandedInstanceGroups.add(nodeId);
-                            const treeEl = state.shadow?.querySelector('.tree');
-                            const savedScroll = treeEl ? treeEl.scrollTop : 0;
-                            renderPanel();
-                            const newTreeEl = state.shadow?.querySelector('.tree');
-                            if (newTreeEl) newTreeEl.scrollTop = savedScroll;
-                        }
-                    }
                 }
-                return;
-            }
-
-            if (target.classList.contains('instance-count')) {
-                const groupId = target.dataset.group!;
-                if (state.expandedInstanceGroups.has(groupId)) {
-                    state.expandedInstanceGroups.delete(groupId);
-                } else {
-                    state.expandedInstanceGroups.add(groupId);
-                }
-                const treeEl = state.shadow?.querySelector('.tree');
-                const savedScroll = treeEl ? treeEl.scrollTop : 0;
-                renderPanel();
-                const newTreeEl = state.shadow?.querySelector('.tree');
-                if (newTreeEl) newTreeEl.scrollTop = savedScroll;
                 return;
             }
 
@@ -323,6 +304,62 @@ function attachNodeEvents() {
                 const { treeNode, domEl } = selectNode();
                 if (window.__updateStickyParents) window.__updateStickyParents();
                 if (treeNode) showDetailDialog(treeNode, domEl);
+                return;
+            }
+
+            if (target.classList.contains('ai-add-btn')) {
+                const nodeName = (node as HTMLElement).dataset.name!;
+                const nodeId = (node as HTMLElement).dataset.id!;
+                const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
+                const definedFile = treeNode?.component?.filePath || (node as HTMLElement).dataset.file || 'unknown';
+                const parentTreeNode = getParentNode(state.DISPLAY_TREE, nodeId);
+                const parentFile = parentTreeNode?.component?.filePath || parentTreeNode?.file || '';
+                const usageLine = treeNode?.usageLine || treeNode?.source?.lineNumber || 0;
+                const hasUsageSite = parentFile && parentFile !== definedFile;
+                const ancestry = getAncestryNames(state.DISPLAY_TREE, nodeId);
+                addComponentToAiContext(
+                    nodeName,
+                    definedFile,
+                    1,
+                    ancestry,
+                    hasUsageSite ? parentFile : undefined,
+                    hasUsageSite ? usageLine : undefined,
+                );
+                if (!state.aiOpen) { state.aiOpen = true; renderAiSection(); }
+                return;
+            }
+
+            if (target.classList.contains('file-btn')) {
+                const defFile = target.getAttribute('data-def-file');
+                if (defFile) {
+                    window.open('cursor://file/' + defFile + ':1');
+                }
+                return;
+            }
+
+            if (target.classList.contains('usage-btn')) {
+                const usageFile = target.getAttribute('data-usage-file');
+                let usageLine = parseInt(target.getAttribute('data-usage-line') || '0', 10);
+                const compName = (node as HTMLElement).dataset.name!;
+                if (usageFile && !usageLine && compName) {
+                    fetch('/__source_file?path=' + encodeURIComponent(usageFile))
+                        .then(r => r.ok ? r.json() : null)
+                        .then(data => {
+                            if (data?.content) {
+                                const lines = data.content.split('\n');
+                                const re = new RegExp('<' + compName + '[\\s/>]');
+                                for (let i = 0; i < lines.length; i++) {
+                                    if (re.test(lines[i])) { usageLine = i + 1; break; }
+                                }
+                            }
+                            window.open('cursor://file/' + usageFile + ':' + (usageLine || 1));
+                        })
+                        .catch(() => window.open('cursor://file/' + usageFile + ':1'));
+                    return;
+                }
+                if (usageFile) {
+                    window.open('cursor://file/' + usageFile + ':' + (usageLine || 1));
+                }
                 return;
             }
 
@@ -346,66 +383,8 @@ function attachNodeEvents() {
             hideHoverHighlight();
         }, { capture: true });
 
-        header.addEventListener('dblclick', e => {
-            e.stopPropagation(); e.stopImmediatePropagation();
-            const nodeId = (node as HTMLElement).dataset.id!;
-            const treeNode = findNodeById(state.DISPLAY_TREE, nodeId);
-            const filePath = treeNode?.source?.fileName || (node as HTMLElement).dataset.file;
-            const lineNumber = treeNode?.source?.lineNumber || 1;
-            if (filePath && filePath !== 'unknown') {
-                const uri = 'cursor://file/' + filePath + ':' + lineNumber;
-                window.open(uri);
-            }
-        }, { capture: true });
     });
 
-    state.shadow.querySelectorAll('.instance-row').forEach(row => {
-        if (row.classList.contains('capped')) return;
-
-        row.addEventListener('click', e => {
-            e.stopPropagation(); e.stopImmediatePropagation();
-            const groupId = (row as HTMLElement).dataset.group!;
-            const idx = parseInt((row as HTMLElement).dataset.idx!, 10);
-            state.selectedInstanceByGroup.set(groupId, idx);
-
-            state.shadow!.querySelectorAll('.instance-row.selected').forEach(el => el.classList.remove('selected'));
-            row.classList.add('selected');
-
-            const treeNode = findNodeById(state.DISPLAY_TREE, groupId);
-            if (treeNode?.instances?.[idx]) {
-                const inst = treeNode.instances[idx];
-                const domEl = getDomFromFiber(inst.fiber);
-                const name = treeNode.component?.name || '—';
-                if (domEl) {
-                    showSelectedHighlight(domEl, name + ' (' + (idx + 1) + ')');
-                    const treeEl = state.shadow?.querySelector('.tree');
-                    if (treeEl) {
-                        const rect = row.getBoundingClientRect();
-                        const treeRect = treeEl.getBoundingClientRect();
-                        treeEl.scrollTop += (rect.top - treeRect.top) - (treeRect.height / 2) + (rect.height / 2);
-                    }
-                }
-            }
-        }, { capture: true });
-
-        row.addEventListener('mouseenter', e => {
-            e.stopPropagation();
-            const groupId = (row as HTMLElement).dataset.group!;
-            const idx = parseInt((row as HTMLElement).dataset.idx!, 10);
-            const treeNode = findNodeById(state.DISPLAY_TREE, groupId);
-            if (treeNode?.instances?.[idx]) {
-                const inst = treeNode.instances[idx];
-                const domEl = getDomFromFiber(inst.fiber);
-                const name = treeNode.component?.name || '—';
-                if (domEl) showHoverHighlight(domEl, name + ' (' + (idx + 1) + ')');
-            }
-        }, { capture: true });
-
-        row.addEventListener('mouseleave', e => {
-            e.stopPropagation();
-            hideHoverHighlight();
-        }, { capture: true });
-    });
 }
 
 export function selectTreeNodeById(nodeId: string): boolean {

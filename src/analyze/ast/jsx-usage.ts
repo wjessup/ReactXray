@@ -9,7 +9,11 @@ export interface ConditionalChild {
 
 export interface JsxUsage {
   directChildren: string[];
+  directChildrenCounts: Map<string, number>;
+  directChildrenLines: Map<string, number[]>;
   nestedInComponent: Map<string, string[]>;
+  nestedChildrenCounts: Map<string, Map<string, number>>;
+  nestedChildrenLines: Map<string, Map<string, number[]>>;
   identifiersInComponent: Map<string, string[]>;
   conditionalChildren: Map<string, ConditionalChild[]>;
 }
@@ -21,19 +25,41 @@ interface ConditionalContext {
 
 export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
   const directChildren = new Set<string>();
+  const directChildrenCounts = new Map<string, number>();
+  const directChildrenLines = new Map<string, number[]>();
   const nestedInComponent = new Map<string, Set<string>>();
+  const nestedChildrenCounts = new Map<string, Map<string, number>>();
+  const nestedChildrenLines = new Map<string, Map<string, number[]>>();
   const identifiersInComponent = new Map<string, Set<string>>();
   const conditionalChildren = new Map<string, ConditionalChild[]>();
   const processedNodes = new WeakSet<Node>();
 
-  function addChild(parentName: string | null, childName: string, condition: ConditionalContext | null) {
+  function addChild(parentName: string | null, childName: string, condition: ConditionalContext | null, lineNumber?: number) {
     if (parentName) {
       if (!nestedInComponent.has(parentName)) {
         nestedInComponent.set(parentName, new Set());
       }
       nestedInComponent.get(parentName)!.add(childName);
+      if (!condition) {
+        if (!nestedChildrenCounts.has(parentName)) nestedChildrenCounts.set(parentName, new Map());
+        const parentCounts = nestedChildrenCounts.get(parentName)!;
+        parentCounts.set(childName, (parentCounts.get(childName) || 0) + 1);
+      }
+      if (lineNumber) {
+        if (!nestedChildrenLines.has(parentName)) nestedChildrenLines.set(parentName, new Map());
+        const parentLines = nestedChildrenLines.get(parentName)!;
+        if (!parentLines.has(childName)) parentLines.set(childName, []);
+        parentLines.get(childName)!.push(lineNumber);
+      }
     } else {
       directChildren.add(childName);
+      if (!condition) {
+        directChildrenCounts.set(childName, (directChildrenCounts.get(childName) || 0) + 1);
+      }
+      if (lineNumber) {
+        if (!directChildrenLines.has(childName)) directChildrenLines.set(childName, []);
+        directChildrenLines.get(childName)!.push(lineNumber);
+      }
     }
     
     if (condition && /^[A-Z]/.test(childName)) {
@@ -75,7 +101,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
     const tagName = getJsxTagName(node);
 
     if (tagName) {
-      addChild(parentComponentName, tagName, condition);
+      addChild(parentComponentName, tagName, condition, node.getStartLineNumber());
 
       const newNearestCustom = isCustomComponent(tagName)
         ? tagName
@@ -185,7 +211,11 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
 
   const result: JsxUsage = {
     directChildren: Array.from(directChildren),
+    directChildrenCounts,
+    directChildrenLines,
     nestedInComponent: new Map(),
+    nestedChildrenCounts,
+    nestedChildrenLines,
     identifiersInComponent: new Map(),
     conditionalChildren,
   };

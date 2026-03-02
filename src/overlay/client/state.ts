@@ -12,6 +12,7 @@ export const state = {
     STATS: {} as any,
     ROUTE: '',
     ARCHITECTURE: null as any,
+    PROJECT_PATH: '',
     DEPS: null as any,
     FIBER_TREE: [] as any[],
     
@@ -31,12 +32,19 @@ export const state = {
     
     selectedFiber: null as any,
     selectedElement: null as any,
-    expandedInstanceGroups: new Set<string>(),
-    selectedInstanceByGroup: new Map<string, number>(),
-    
+    elementToFiberMap: new WeakMap<Element, any>(),
     renderCounts: new Map<string, number>(),
     totalRenders: 0,
-    isMinified: false
+    isMinified: false,
+
+    aiOpen: false,
+    aiMessage: '',
+    aiContext: [] as Array<{ name: string; file: string; line: number; ancestry: string[]; usageFile?: string; usageLine?: number }>,
+    aiSending: false,
+    aiResult: null as {
+        prompt: string;
+        cursorLinks: string[];
+    } | null,
 };
 
 export function saveState() {

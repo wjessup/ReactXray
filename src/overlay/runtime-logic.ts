@@ -52,6 +52,7 @@ export function mergeStaticWithFiber(
   usedFibers = new Set<any>(),
   staticNamesInTree: Set<string> | null = null,
   parentFiber: any = null,
+  parentUnrendered = false,
 ): any[] {
   if (!staticNamesInTree) {
     staticNamesInTree = collectStaticNames(staticNodes);
@@ -70,33 +71,25 @@ export function mergeStaticWithFiber(
           usedFibers,
           staticNamesInTree,
           parentFiber,
+          parentUnrendered,
         ),
         isSlot: true,
       };
     }
 
-    let instances: any[] = [];
     let fiberMatch = null;
 
-    if (compName && fiberLookup.has(compName)) {
+    if (!parentUnrendered && compName && fiberLookup.has(compName)) {
       const candidates = fiberLookup.get(compName)!;
 
       if (parentFiber) {
         for (const candidate of candidates) {
           if (usedFibers.has(candidate)) continue;
           if (isFiberDescendantOf(candidate, parentFiber)) {
-            instances.push({
-              fiber: candidate.fiber,
-              source: candidate.source,
-            });
+            fiberMatch = { fiber: candidate.fiber, source: candidate.source };
             usedFibers.add(candidate);
+            break;
           }
-        }
-        if (instances.length > 0) {
-          fiberMatch = {
-            fiber: instances[0].fiber,
-            source: instances[0].source,
-          };
         }
       }
 
@@ -105,7 +98,6 @@ export function mergeStaticWithFiber(
           if (!usedFibers.has(candidate)) {
             fiberMatch = candidate;
             usedFibers.add(candidate);
-            instances = [{ fiber: candidate.fiber, source: candidate.source }];
             break;
           }
         }
@@ -113,6 +105,7 @@ export function mergeStaticWithFiber(
     }
 
     const nextParentFiber = fiberMatch?.fiber || parentFiber;
+    const thisUnrendered = parentUnrendered || (isClientComponent && !fiberMatch);
 
     if (fiberMatch && isClientComponent) {
       return {
@@ -122,17 +115,18 @@ export function mergeStaticWithFiber(
           fileName: staticNode.component?.filePath,
         },
         fiber: fiberMatch.fiber,
-        instances: instances.length > 1 ? instances : undefined,
         children: mergeStaticWithFiber(
           staticNode.children || [],
           fiberLookup,
           usedFibers,
           staticNamesInTree,
           nextParentFiber,
+          false,
         ),
         isBridge: true,
         hasFiber: true,
         renderCondition: staticNode.renderCondition,
+        usageLine: staticNode.usageLine,
       };
     }
 
@@ -143,17 +137,18 @@ export function mergeStaticWithFiber(
         ? { fileName: staticNode.component.filePath }
         : null,
       fiber: fiberMatch?.fiber || null,
-      instances: instances.length > 1 ? instances : undefined,
       children: mergeStaticWithFiber(
         staticNode.children || [],
         fiberLookup,
         usedFibers,
         staticNamesInTree,
         nextParentFiber,
+        thisUnrendered,
       ),
       isServerOnly: !fiberMatch && !isClientComponent,
       hasFiber: !!fiberMatch,
       renderCondition: staticNode.renderCondition,
+      usageLine: staticNode.usageLine,
     };
   });
 }
@@ -166,7 +161,7 @@ export function findNodeIdByFiber(
   for (let i = 0; i < nodes.length; i++) {
     const nodeId = prefix ? prefix + "-" + i : String(i);
     const node = nodes[i];
-    if (node?.fiber === fiber) return nodeId;
+    if (node?.fiber && (node.fiber === fiber || node.fiber.alternate === fiber || node.fiber === fiber.alternate)) return nodeId;
     if (node?.children?.length) {
       const found = findNodeIdByFiber(node.children, fiber, nodeId);
       if (found) return found;
@@ -190,22 +185,6 @@ export function findNodeIdForFiber(
   return null;
 }
 
-export function findInstanceIndexForFiber(
-  node: any,
-  clickedFiber: any,
-): number {
-  if (!node?.instances || node.instances.length <= 1) return -1;
-  let current = clickedFiber;
-  const seen = new Set<any>();
-  while (current && !seen.has(current)) {
-    seen.add(current);
-    for (let i = 0; i < node.instances.length; i++) {
-      if (node.instances[i].fiber === current) return i;
-    }
-    current = current.return;
-  }
-  return -1;
-}
 
 export function getNodeByPath(tree: any[], path: string): any | null {
   if (!path) return null;

@@ -373,4 +373,42 @@ describe("extractJsxUsage", () => {
     expect(loading?.branch).toBe("true");
     expect(loading?.expression).toBe('status === "loading"');
   });
+
+  it("tracks occurrence counts for duplicate direct children", () => {
+    const sf = parseJsx(`
+      function Page() {
+        return (
+          <div>
+            <Button />
+            <Input />
+            <InboxTree />
+            <div>
+              <InboxTree />
+            </div>
+          </div>
+        );
+      }
+    `);
+    const usage = extractJsxUsage(sf);
+    expect(usage.directChildren).toContain("Button");
+    expect(usage.directChildren).toContain("InboxTree");
+    expect(usage.directChildrenCounts.get("InboxTree")).toBe(2);
+    expect(usage.directChildrenCounts.get("Button")).toBe(1);
+    expect(usage.directChildrenCounts.get("Input")).toBe(1);
+  });
+
+  it("does not double-count conditional branches of same component", () => {
+    const sf = parseJsx(`
+      function Page() {
+        return (
+          <div>
+            {isGrid ? <DataView variant="grid" /> : <DataView variant="list" />}
+          </div>
+        );
+      }
+    `);
+    const usage = extractJsxUsage(sf);
+    expect(usage.directChildren).toContain("DataView");
+    expect(usage.directChildrenCounts.get("DataView")).toBeUndefined();
+  });
 });
