@@ -488,21 +488,37 @@ export function findBestMatchingElement(displayTree: any[], node: any, nodeId: s
     }
     const name = node.component.name;
     const allMatches = findElementsByComponentName(name);
-    if (allMatches.length === 0) return null;
     if (allMatches.length === 1) return allMatches[0];
+    if (allMatches.length > 1) {
+        const parentName = getParentName(displayTree, nodeId);
+        const sibIdx = getSiblingIndex(displayTree, nodeId);
 
-    const parentName = getParentName(displayTree, nodeId);
-    const sibIdx = getSiblingIndex(displayTree, nodeId);
+        for (const el of allMatches) {
+            if (getFiberParentName(el) === parentName && getFiberSiblingIndex(el, name) === sibIdx) {
+                return el;
+            }
+        }
+        for (const el of allMatches) {
+            if (getFiberParentName(el) === parentName) return el;
+        }
+        return allMatches[0];
+    }
 
-    for (const el of allMatches) {
-        if (getFiberParentName(el) === parentName && getFiberSiblingIndex(el, name) === sibIdx) {
-            return el;
+    // Server-only fallback: walk up tree to find nearest ancestor with a fiber/DOM
+    if (node.isServerOnly && nodeId) {
+        const parts = nodeId.split('-').map(Number);
+        while (parts.length > 0) {
+            parts.pop();
+            const parentId = parts.length > 0 ? parts.join('-') : '0';
+            const parentNode = findNodeById(displayTree, parentId);
+            if (parentNode?.fiber) {
+                const parentDom = getDomFromFiber(parentNode.fiber);
+                if (parentDom) return parentDom;
+            }
+            if (parts.length <= 1) break;
         }
     }
-    for (const el of allMatches) {
-        if (getFiberParentName(el) === parentName) return el;
-    }
-    return allMatches[0];
+    return null;
 }
 
 let _displayNamesCache: Set<string> | null = null;

@@ -3,7 +3,7 @@ import { state, callbacks } from './state';
 import { renderPanel, selectTreeNodeById, selectTreeNodeByStack } from './ui';
 import { setupRenderTracking } from './render-tracking';
 import { showHoverHighlight, hideHoverHighlight, showSelectedHighlight, hideSelectedHighlight } from './highlight';
-import { isOverlayElement, getFiberFromElement, getFiberName, getDomFromFiber, getComponentStack, findNodeById, resetFiberKeyCache } from './utils';
+import { isOverlayElement, getFiberFromElement, getReactFiber, getFiberName, getDomFromFiber, getComponentStack, findNodeById, resetFiberKeyCache } from './utils';
 import { refreshAnalysis, checkForRouteChange, buildStaticComponentMap, loadComponentAllowlist, refreshFiberTree, toggle } from './logic';
 import { findNodeIdForFiber } from '../runtime-logic.js';
 
@@ -74,6 +74,8 @@ function enableInspectMode() {
             let chosenName: string | null = null;
             let selectedNodeId: string | null = null;
 
+            let fiberAncestorMatch: { nodeId: string; name: string } | null = null;
+
             if (fiber) {
                 selectedNodeId = findNodeIdForFiber(state.DISPLAY_TREE, fiber);
                 if (selectedNodeId) {
@@ -84,6 +86,9 @@ function enableInspectMode() {
                         chosenName = name;
                         dbg.push(`[Inspector] ✓ Direct fiber match: "${name}" at ${selectedNodeId}`);
                     } else {
+                        // Save as fallback — fiber ancestry found a tree node but name differs
+                        // (common for server-rendered elements whose fiber is a framework internal)
+                        fiberAncestorMatch = { nodeId: selectedNodeId, name: matchedName || name };
                         dbg.push(`[Inspector] Fiber → "${matchedName}" (wanted "${name}"), trying stack`);
                         selectedNodeId = null;
                     }
@@ -110,6 +115,78 @@ function enableInspectMode() {
                         break;
                     }
                 }
+            }
+
+            // Server component matching via _debugInfo (React dev mode)
+            if (!selectedNodeId) {
+                const rawFiber = getReactFiber(e.target);
+                const debugInfoArr = rawFiber?._debugInfo;
+                if (Array.isArray(debugInfoArr)) {
+                    // Extract server component stack from _debugInfo
+                    const serverStack: string[] = [];
+                    for (const entry of debugInfoArr) {
+                        if (entry.name && entry.env === 'Server') {
+                            serverStack.push(entry.name);
+                            // Walk the owner chain for ancestry
+                            let owner = entry.owner;
+                            const seenOwners = new Set();
+                            while (owner && serverStack.length < 15) {
+                                if (seenOwners.has(owner)) break;
+                                seenOwners.add(owner);
+                                if (owner.name && owner.env === 'Server') {
+                                    serverStack.push(owner.name);
+                                }
+                                owner = owner.owner;
+                            }
+                            break; // Use first server component entry
+                        }
+                    }
+
+                    if (serverStack.length > 0) {
+                        dbg.push(`[Inspector] Server component stack: [${serverStack.join(' → ')}]`);
+                        // Try ancestry matching with server stack
+                        selectedNodeId = selectTreeNodeByStack(serverStack);
+                        if (selectedNodeId) {
+                            const foundNode = findNodeById(state.DISPLAY_TREE, selectedNodeId);
+                            chosenName = foundNode?.component?.name || serverStack[0];
+                            dbg.push(`[Inspector] ✓ Server _debugInfo match: "${chosenName}" at ${selectedNodeId}`);
+                        }
+                    }
+                }
+            }
+
+            // Fallback: walk up DOM ancestors to find nearest component in tree
+            if (!selectedNodeId) {
+                let ancestor: Element | null = (e.target as Element)?.parentElement;
+                const triedFibers = new Set<any>();
+                triedFibers.add(fiber);
+                while (ancestor && !selectedNodeId) {
+                    if (isOverlayElement(ancestor)) break;
+                    const ancFiber = getFiberFromElement(ancestor);
+                    if (ancFiber && !triedFibers.has(ancFiber)) {
+                        triedFibers.add(ancFiber);
+                        const ancId = findNodeIdForFiber(state.DISPLAY_TREE, ancFiber);
+                        if (ancId) {
+                            const ancNode = findNodeById(state.DISPLAY_TREE, ancId);
+                            const ancName = ancNode?.component?.name;
+                            if (ancName) {
+                                selectTreeNodeById(ancId);
+                                selectedNodeId = ancId;
+                                chosenName = ancName;
+                                dbg.push(`[Inspector] ✓ DOM ancestor fallback: "${ancName}" at ${ancId}`);
+                            }
+                        }
+                    }
+                    ancestor = ancestor.parentElement;
+                }
+            }
+
+            // Last resort: use the fiber ancestry match (wrong name but valid tree node)
+            if (!selectedNodeId && fiberAncestorMatch) {
+                selectedNodeId = fiberAncestorMatch.nodeId;
+                chosenName = fiberAncestorMatch.name;
+                selectTreeNodeById(selectedNodeId);
+                dbg.push(`[Inspector] ✓ Fiber ancestor fallback: "${chosenName}" at ${selectedNodeId}`);
             }
 
             if (!selectedNodeId) {
