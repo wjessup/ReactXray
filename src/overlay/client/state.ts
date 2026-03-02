@@ -35,7 +35,8 @@ export const state = {
     selectedInstanceByGroup: new Map<string, number>(),
     
     renderCounts: new Map<string, number>(),
-    totalRenders: 0
+    totalRenders: 0,
+    isMinified: false
 };
 
 export function saveState() {

@@ -33,7 +33,7 @@ export function renderPanel() {
         <div class="resize-handle"></div>
         <div class="header">
           <div class="header-row">
-            <h2>🧩 Component Overlay</h2>
+            <h2>🧩 Component Overlay${state.isMinified ? ' <span class="minified-warn" title="Code appears minified — component names may be inaccurate">⚠️</span>' : ''}</h2>
             <div class="header-buttons">
               <div class="view-toggle" style="display:flex; gap:12px; font-size:11px; margin-left:12px; background:#0d1117; padding:4px 8px; border-radius:6px; border:1px solid #30363d; color:#c9d1d9;">
                 <label style="cursor:pointer; display:flex; align-items:center; gap:4px;"><input type="radio" name="viewMode" value="tree" ${state.viewMode !== 'list' ? 'checked' : ''} style="cursor:pointer;margin:0;accent-color:#58a6ff;"> Tree</label>

@@ -65,6 +65,12 @@ export const OVERLAY_CSS = `
     flex-shrink: 0;
   }
 
+  .minified-warn {
+    cursor: help;
+    font-size: 14px;
+    margin-left: 4px;
+  }
+
   .header h2 {
     color: #58a6ff;
     font-size: 13px;
