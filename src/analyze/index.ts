@@ -727,6 +727,11 @@ function buildComponentTree(
       }
     }
 
+    // For project components nested under non-project wrappers (e.g. <Route element={<Index />}>),
+    // walk through the nesting hierarchy and collect them.
+    // Only walk non-project parents reachable from directChildren through non-project chains.
+    // Do NOT walk non-project parents that are nested under a project parent
+    // (those are handled by the passedAsChildren expansion).
     const visited = new Set<string>();
 
     function collectFromNonProjectParent(parentName: string) {
@@ -752,9 +757,10 @@ function buildComponentTree(
       }
     }
 
-    for (const [parentName] of jsxUsage.nestedInComponent) {
-      if (!nameToFileMap.has(parentName)) {
-        collectFromNonProjectParent(parentName);
+    // Only start from non-project direct children (top-level wrappers)
+    for (const directChild of jsxUsage.directChildren) {
+      if (!nameToFileMap.has(directChild)) {
+        collectFromNonProjectParent(directChild);
       }
     }
 
@@ -804,6 +810,24 @@ function buildComponentTree(
     return next;
   }
 
+  // Expand non-project wrappers (e.g. Suspense, Fragment) to their nested project children
+  function expandNonProjectWrappers(
+    names: string[],
+    jsxUsage: EnhancedJsxUsage | null,
+  ): string[] {
+    const result: string[] = [];
+    for (const name of names) {
+      if (nameToFileMap.has(name)) {
+        result.push(name);
+      } else if (jsxUsage) {
+        // Non-project wrapper: hoist its nested children
+        const nested = jsxUsage.nestedInComponent.get(name) || [];
+        result.push(...expandNonProjectWrappers(nested, jsxUsage));
+      }
+    }
+    return result;
+  }
+
   function buildFromFile(
     file: string,
     callerJsxUsage: EnhancedJsxUsage | null,
@@ -823,10 +847,12 @@ function buildComponentTree(
     const children: ComponentTreeNode[] = [];
     const fileJsxUsage = jsxUsageMap.get(file);
 
-    const passedAsChildren =
+    const rawPassedAsChildren =
       fromComponentName && callerJsxUsage
         ? callerJsxUsage.nestedInComponent.get(fromComponentName) || []
         : [];
+
+    const passedAsChildren = expandNonProjectWrappers(rawPassedAsChildren, callerJsxUsage);
 
     for (const childName of passedAsChildren) {
       const childFile = nameToFileMap.get(childName);
@@ -906,7 +932,7 @@ function buildComponentTree(
   function buildWithPassedChildren(
     file: string,
     componentName: string,
-    passedChildren: string[],
+    rawPassedChildren: string[],
     callerJsxUsage: EnhancedJsxUsage | null,
     ancestorPath: Set<string>,
   ): ComponentTreeNode {
@@ -922,6 +948,9 @@ function buildComponentTree(
 
     const children: ComponentTreeNode[] = [];
     const fileJsxUsage = jsxUsageMap.get(file);
+
+    // Expand non-project wrappers to their nested project children
+    const passedChildren = expandNonProjectWrappers(rawPassedChildren, callerJsxUsage);
 
     for (const childName of passedChildren) {
       const childFile = nameToFileMap.get(childName);
