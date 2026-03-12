@@ -94,6 +94,7 @@ export interface ComponentTreeNode {
 export interface RouteEntryFiles {
   layouts: string[];
   page: string | null;
+  slots?: Record<string, string>;
   loading: string | null;
   error: string | null;
   template: string | null;
