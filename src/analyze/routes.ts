@@ -50,10 +50,27 @@ export async function resolveRouteFiles(
   }
 
   const finalDir = pathWithPage.dirs[pathWithPage.dirs.length - 1];
+  const slots: Record<string, string> = {};
+  const entries = await fs
+    .readdir(finalDir, { withFileTypes: true })
+    .catch(() => []);
+
+  for (const entry of entries) {
+    if (entry.isDirectory() && entry.name.startsWith("@")) {
+      const slotName = entry.name.slice(1);
+      const slotPage =
+        await findConventionFile(path.join(finalDir, entry.name), "page") ||
+        await findConventionFile(path.join(finalDir, entry.name), "default");
+      if (slotPage) {
+        slots[slotName] = slotPage;
+      }
+    }
+  }
 
   return {
     layouts,
     page: pathWithPage.page,
+    slots,
     loading: await findConventionFile(finalDir, "loading"),
     error:
       (await findConventionFile(finalDir, "error")) ||

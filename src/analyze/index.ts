@@ -75,7 +75,7 @@ export async function getProjectComponentNames(
   for (const file of files) {
     try {
       project.addSourceFileAtPath(file);
-    } catch {}
+    } catch { }
   }
 
   const componentNames = new Set<string>();
@@ -710,7 +710,7 @@ function buildComponentTree(
     effectiveLines: Map<string, number[]>;
   }
 
-  function getAllProjectComponentsFromFile(file: string): FileComponentUsage {
+  function getAllProjectComponentsFromFile(file: string, knownSlots: string[] = []): FileComponentUsage {
     const jsxUsage = jsxUsageMap.get(file);
     if (!jsxUsage) return { names: [], effectiveCounts: new Map(), effectiveLines: new Map() };
 
@@ -719,7 +719,7 @@ function buildComponentTree(
     const allComponents = new Set<string>();
 
     for (const name of jsxUsage.directChildren) {
-      if (nameToFileMap.has(name)) {
+      if (nameToFileMap.has(name) || knownSlots.includes(name)) {
         allComponents.add(name);
         effectiveCounts.set(name, jsxUsage.directChildrenCounts.get(name) || 1);
         const lines = jsxUsage.directChildrenLines.get(name);
@@ -727,11 +727,6 @@ function buildComponentTree(
       }
     }
 
-    // For project components nested under non-project wrappers (e.g. <Route element={<Index />}>),
-    // walk through the nesting hierarchy and collect them.
-    // Only walk non-project parents reachable from directChildren through non-project chains.
-    // Do NOT walk non-project parents that are nested under a project parent
-    // (those are handled by the passedAsChildren expansion).
     const visited = new Set<string>();
 
     function collectFromNonProjectParent(parentName: string) {
@@ -742,7 +737,7 @@ function buildComponentTree(
       const parentCounts = jsxUsage!.nestedChildrenCounts.get(parentName);
       const parentLines = jsxUsage!.nestedChildrenLines.get(parentName);
       for (const childName of nested) {
-        if (nameToFileMap.has(childName)) {
+        if (nameToFileMap.has(childName) || knownSlots.includes(childName)) {
           allComponents.add(childName);
           const nestedCount = parentCounts?.get(childName) || 1;
           effectiveCounts.set(childName, (effectiveCounts.get(childName) || 0) + nestedCount);
@@ -757,9 +752,8 @@ function buildComponentTree(
       }
     }
 
-    // Only start from non-project direct children (top-level wrappers)
     for (const directChild of jsxUsage.directChildren) {
-      if (!nameToFileMap.has(directChild)) {
+      if (!nameToFileMap.has(directChild) && !knownSlots.includes(directChild)) {
         collectFromNonProjectParent(directChild);
       }
     }
@@ -783,14 +777,14 @@ function buildComponentTree(
   ): ComponentTreeNode["renderCondition"] {
     const jsxUsage = jsxUsageMap.get(file);
     if (!jsxUsage?.conditionalChildren) return undefined;
-    
+
     const key = parentComponentName || "__direct__";
     const conditions = jsxUsage.conditionalChildren.get(key);
     if (!conditions) return undefined;
-    
+
     const match = conditions.find((c) => c.component === childName);
     if (!match) return undefined;
-    
+
     return { expression: match.expression, branch: match.branch };
   }
 
@@ -814,15 +808,16 @@ function buildComponentTree(
   function expandNonProjectWrappers(
     names: string[],
     jsxUsage: EnhancedJsxUsage | null,
+    knownSlots: string[] = []
   ): string[] {
     const result: string[] = [];
     for (const name of names) {
-      if (nameToFileMap.has(name)) {
+      if (nameToFileMap.has(name) || knownSlots.includes(name)) {
         result.push(name);
       } else if (jsxUsage) {
         // Non-project wrapper: hoist its nested children
         const nested = jsxUsage.nestedInComponent.get(name) || [];
-        result.push(...expandNonProjectWrappers(nested, jsxUsage));
+        result.push(...expandNonProjectWrappers(nested, jsxUsage, knownSlots));
       }
     }
     return result;
@@ -833,6 +828,7 @@ function buildComponentTree(
     callerJsxUsage: EnhancedJsxUsage | null,
     fromComponentName: string | null,
     ancestorPath: Set<string>,
+    knownSlots: string[] = []
   ): ComponentTreeNode {
     const myKey = fromComponentName ? `${fromComponentName}@${file}` : `@${file}`;
     if (ancestorPath.has(myKey)) {
@@ -852,9 +848,14 @@ function buildComponentTree(
         ? callerJsxUsage.nestedInComponent.get(fromComponentName) || []
         : [];
 
-    const passedAsChildren = expandNonProjectWrappers(rawPassedAsChildren, callerJsxUsage);
+    const passedAsChildren = expandNonProjectWrappers(rawPassedAsChildren, callerJsxUsage, knownSlots);
 
     for (const childName of passedAsChildren) {
+      if (knownSlots.includes(childName)) {
+        children.push({ file: `{${childName}}`, component: null, children: [] });
+        continue;
+      }
+
       const childFile = nameToFileMap.get(childName);
       if (childFile && !isCircular(childName, childFile, currentPath)) {
         const nestedInChild =
@@ -865,7 +866,7 @@ function buildComponentTree(
             childName,
             nestedInChild,
             callerJsxUsage,
-            currentPath,
+            currentPath
           ),
         );
       }
@@ -882,21 +883,28 @@ function buildComponentTree(
               childFile,
               fileJsxUsage || null,
               childName,
-              currentPath,
+              currentPath
             ),
           );
         }
       }
     }
 
-    const { names: allProjectComponents, effectiveCounts, effectiveLines } = getAllProjectComponentsFromFile(file);
+    const { names: allProjectComponents, effectiveCounts, effectiveLines } = getAllProjectComponentsFromFile(file, knownSlots);
     for (const childName of allProjectComponents) {
       const existingCount = children.filter(
-        (c) => c.component?.name === childName,
+        (c) => c.component?.name === childName || c.file === `{${childName}}`,
       ).length;
       const targetCount = effectiveCounts.get(childName) || 1;
       const remaining = Math.max(0, targetCount - existingCount);
       if (remaining === 0) continue;
+
+      if (knownSlots.includes(childName)) {
+        for (let n = 0; n < remaining; n++) {
+          children.push({ file: `{${childName}}`, component: null, children: [] });
+        }
+        continue;
+      }
 
       const childFile = nameToFileMap.get(childName);
       if (!childFile || isCircular(childName, childFile, currentPath)) continue;
@@ -907,7 +915,7 @@ function buildComponentTree(
           childFile,
           fileJsxUsage || null,
           childName,
-          currentPath,
+          currentPath
         );
 
         const condition = getRenderCondition(file, null, childName);
@@ -935,6 +943,7 @@ function buildComponentTree(
     rawPassedChildren: string[],
     callerJsxUsage: EnhancedJsxUsage | null,
     ancestorPath: Set<string>,
+    knownSlots: string[] = []
   ): ComponentTreeNode {
     const myKey = `${componentName}@${file}`;
     if (ancestorPath.has(myKey)) {
@@ -950,9 +959,14 @@ function buildComponentTree(
     const fileJsxUsage = jsxUsageMap.get(file);
 
     // Expand non-project wrappers to their nested project children
-    const passedChildren = expandNonProjectWrappers(rawPassedChildren, callerJsxUsage);
+    const passedChildren = expandNonProjectWrappers(rawPassedChildren, callerJsxUsage, knownSlots);
 
     for (const childName of passedChildren) {
+      if (knownSlots.includes(childName)) {
+        children.push({ file: `{${childName}}`, component: null, children: [] });
+        continue;
+      }
+
       const childFile = nameToFileMap.get(childName);
       if (childFile && !isCircular(childName, childFile, currentPath)) {
         const nestedInChild =
@@ -963,7 +977,7 @@ function buildComponentTree(
             childName,
             nestedInChild,
             callerJsxUsage,
-            currentPath,
+            currentPath
           ),
         );
       }
@@ -980,21 +994,28 @@ function buildComponentTree(
               childFile,
               fileJsxUsage || null,
               childName,
-              currentPath,
+              currentPath
             ),
           );
         }
       }
     }
 
-    const { names: allProjectComponents2, effectiveCounts: ec2, effectiveLines: el2 } = getAllProjectComponentsFromFile(file);
+    const { names: allProjectComponents2, effectiveCounts: ec2, effectiveLines: el2 } = getAllProjectComponentsFromFile(file, knownSlots);
     for (const childName of allProjectComponents2) {
       const existingCount = children.filter(
-        (c) => c.component?.name === childName,
+        (c) => c.component?.name === childName || c.file === `{${childName}}`,
       ).length;
       const targetCount = ec2.get(childName) || 1;
       const remaining = Math.max(0, targetCount - existingCount);
       if (remaining === 0) continue;
+
+      if (knownSlots.includes(childName)) {
+        for (let n = 0; n < remaining; n++) {
+          children.push({ file: `{${childName}}`, component: null, children: [] });
+        }
+        continue;
+      }
 
       const childFile = nameToFileMap.get(childName);
       if (!childFile || isCircular(childName, childFile, currentPath)) continue;
@@ -1005,7 +1026,7 @@ function buildComponentTree(
           childFile,
           fileJsxUsage || null,
           childName,
-          currentPath,
+          currentPath
         );
 
         const condition = getRenderCondition(file, null, childName);
@@ -1027,39 +1048,79 @@ function buildComponentTree(
 
   const buildNode = (
     absPath: string,
-    childSlot: ComponentTreeNode | null,
+    childSlots: Record<string, ComponentTreeNode>,
     ancestorPath: Set<string>,
   ): ComponentTreeNode => {
     const file = path.relative(targetPath, absPath);
-    const node = buildFromFile(file, null, null, ancestorPath);
+    const knownSlots = Object.keys(childSlots);
+    const node = buildFromFile(file, null, null, ancestorPath, knownSlots);
 
-    if (childSlot) {
-      node.children.push({
-        file: "{children}",
-        component: null,
-        children: [childSlot],
-      });
+    for (const [slotName, slotNode] of Object.entries(childSlots)) {
+      const injected = injectChildSlot(node, slotName, slotNode);
+      if (!injected) {
+        // Fallback: append at root if parsing missed the usage
+        node.children.push({
+          file: `{${slotName}}`,
+          component: null,
+          children: [slotNode],
+        });
+      }
     }
 
     return node;
   };
 
+  const injectChildSlot = (
+    current: ComponentTreeNode,
+    slotName: string,
+    slotToInject: ComponentTreeNode,
+  ): boolean => {
+    for (let i = 0; i < current.children.length; i++) {
+      const child = current.children[i];
+      if (child.file === `{${slotName}}`) {
+        child.children.push(slotToInject);
+        return true;
+      }
+      if (injectChildSlot(child, slotName, slotToInject)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   let innermost: ComponentTreeNode | null = null;
   const rootPath = new Set<string>();
 
-  if (entryFiles.page) innermost = buildNode(entryFiles.page, null, rootPath);
+  const pageSlots: Record<string, ComponentTreeNode> = {};
+  if (entryFiles.page) {
+    pageSlots["children"] = buildNode(entryFiles.page, {}, rootPath);
+  }
+  if (entryFiles.slots) {
+    for (const [slotName, slotPath] of Object.entries(entryFiles.slots)) {
+      pageSlots[slotName] = buildNode(slotPath, {}, rootPath);
+    }
+  }
+
+  innermost = pageSlots["children"] || null;
+  // If we have a layout hierarchy, the innermost 'childSlots' object we pass up contains all current slots
+  let currentSlots = { ...pageSlots };
+
   for (let i = entryFiles.layouts.length - 1; i >= 0; i--) {
-    innermost = buildNode(entryFiles.layouts[i], innermost, rootPath);
+    const layoutNode = buildNode(entryFiles.layouts[i], currentSlots, rootPath);
+    innermost = layoutNode;
+    // The previous layout encapsulates all inner slots, so subsequent layouts
+    // only receive 'children' pointing to this newly built layout node
+    currentSlots = { children: layoutNode };
   }
 
   const result: ComponentTreeNode[] = [];
   if (innermost) result.push(innermost);
   if (entryFiles.loading)
-    result.push(buildNode(entryFiles.loading, null, rootPath));
+    result.push(buildNode(entryFiles.loading, {}, rootPath));
   if (entryFiles.error)
-    result.push(buildNode(entryFiles.error, null, rootPath));
+    result.push(buildNode(entryFiles.error, {}, rootPath));
   if (entryFiles.notFound)
-    result.push(buildNode(entryFiles.notFound, null, rootPath));
+    result.push(buildNode(entryFiles.notFound, {}, rootPath));
 
   return result;
 }

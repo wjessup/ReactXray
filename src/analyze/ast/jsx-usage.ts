@@ -61,7 +61,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
         directChildrenLines.get(childName)!.push(lineNumber);
       }
     }
-    
+
     if (condition && /^[A-Z]/.test(childName)) {
       const key = parentName || "__direct__";
       if (!conditionalChildren.has(key)) {
@@ -117,8 +117,8 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
       const attributes = Node.isJsxElement(node)
         ? node.getOpeningElement().getAttributes()
         : Node.isJsxSelfClosingElement(node)
-        ? node.getAttributes()
-        : [];
+          ? node.getAttributes()
+          : [];
 
       for (const attr of attributes) {
         if (Node.isJsxAttribute(attr)) {
@@ -140,6 +140,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
             ? parentComponentName
             : nearestCustomComponent;
           addIdentifier(target, expr.getText());
+          addChild(parentComponentName, expr.getText(), condition, node.getStartLineNumber());
         }
         processJsxTree(expr, parentComponentName, nearestCustomComponent, condition);
       }
@@ -148,6 +149,7 @@ export function extractJsxUsage(sourceFile: SourceFile): JsxUsage {
         ? parentComponentName
         : nearestCustomComponent;
       addIdentifier(target, node.getText());
+      addChild(parentComponentName, node.getText(), condition, node.getStartLineNumber());
     } else if (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) {
       const body = Node.isArrowFunction(node) ? node.getBody() : node.getBody();
       if (body) {
